@@ -8,10 +8,13 @@
 //!
 //! - [`resource`]: The foundational Entity / Resource model.
 //! - [`relationship`]: Directional relationship model between resource identities.
+//! - [`evidence`]: Point-in-time observation model (factual foundation for discovery).
 
+pub mod evidence;
 pub mod relationship;
 pub mod resource;
 
+pub use evidence::{CollectorId, Evidence, EvidenceId, EvidenceSource, ObservationType};
 pub use relationship::{Relationship, RelationshipCategory, RelationshipKind};
 pub use resource::{
     Attributes, Provider, Resource, ResourceId, ResourceIdentity, ResourceKind, ResourceMetadata,
