@@ -342,6 +342,76 @@ impl Resource {
             metadata,
         }
     }
+
+    /// Derive the canonical [`ResourceIdentity`] from this resource's
+    /// provider, resource_type, and provider_id.
+    pub fn identity(&self) -> ResourceIdentity {
+        ResourceIdentity::new(
+            self.provider.clone(),
+            self.resource_type.clone(),
+            self.provider_id.clone(),
+        )
+    }
+}
+
+impl From<&Resource> for ResourceIdentity {
+    fn from(r: &Resource) -> Self {
+        r.identity()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ResourceIdentity
+// ---------------------------------------------------------------------------
+
+/// The real-world / provider identity of an infrastructure resource.
+///
+/// Unlike [`ResourceId`], which is an internal WB-generated UUID,
+/// `ResourceIdentity` identifies the real-world or provider resource using its
+/// logical addressable identity.
+///
+/// It comprises:
+/// - `provider`: the origin system (e.g. `"kubernetes"`, `"aws"`)
+/// - `resource_type`: kind within that provider (e.g. `"pod"`, `"rds"`)
+/// - `provider_id`: provider-native logical identity (e.g. namespace/name, ARN)
+///
+/// `ResourceIdentity` is a value type: it is small, comparable, hashable, and
+/// serializable. It is used as the endpoint identity in relationships.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ResourceIdentity {
+    /// The provider/environment where the resource lives.
+    pub provider: Provider,
+    /// The kind of resource within that provider.
+    pub resource_type: ResourceKind,
+    /// The provider-native logical/addressable identifier.
+    pub provider_id: String,
+}
+
+impl ResourceIdentity {
+    /// Construct a new `ResourceIdentity`.
+    pub fn new(
+        provider: Provider,
+        resource_type: ResourceKind,
+        provider_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            provider,
+            resource_type,
+            provider_id: provider_id.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for ResourceIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}:{}:{}",
+            self.provider.as_str(),
+            self.resource_type.as_str(),
+            self.provider_id
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -388,7 +458,10 @@ mod tests {
             "cluster/prod/namespace/payments/pod/payments-api-7d8f9"
         );
         assert_eq!(
-            resource.attributes.get("namespace").and_then(|v| v.as_str()),
+            resource
+                .attributes
+                .get("namespace")
+                .and_then(|v| v.as_str()),
             Some("payments")
         );
         assert_eq!(
@@ -471,7 +544,10 @@ mod tests {
             ResourceMetadata::empty(),
         );
 
-        assert_eq!(resource.resource_type.as_str(), "payment-processing-service-v2");
+        assert_eq!(
+            resource.resource_type.as_str(),
+            "payment-processing-service-v2"
+        );
         assert_eq!(resource.provider.as_str(), "internal");
     }
 
@@ -537,7 +613,10 @@ mod tests {
         assert!(aws.attributes.contains_key("region"));
 
         // Numeric values work too.
-        assert_eq!(k8s.attributes.get("port").and_then(|v| v.as_u64()), Some(80));
+        assert_eq!(
+            k8s.attributes.get("port").and_then(|v| v.as_u64()),
+            Some(80)
+        );
         assert_eq!(
             aws.attributes.get("memory_mb").and_then(|v| v.as_u64()),
             Some(512)
@@ -564,7 +643,11 @@ mod tests {
 
         // Metadata labels are separate from provider attributes.
         assert_eq!(
-            resource.metadata.labels.get("managed-by").map(String::as_str),
+            resource
+                .metadata
+                .labels
+                .get("managed-by")
+                .map(String::as_str),
             Some("wb-core")
         );
         assert_eq!(

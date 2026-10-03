@@ -7,5 +7,12 @@
 //! # Modules
 //!
 //! - [`resource`]: The foundational Entity / Resource model.
+//! - [`relationship`]: Directional relationship model between resource identities.
 
+pub mod relationship;
 pub mod resource;
+
+pub use relationship::{Relationship, RelationshipCategory, RelationshipKind};
+pub use resource::{
+    Attributes, Provider, Resource, ResourceId, ResourceIdentity, ResourceKind, ResourceMetadata,
+};
