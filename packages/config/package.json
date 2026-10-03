@@ -1,0 +1,19 @@
+{
+  "name": "@tokentimer/config",
+  "version": "0.3.0",
+  "description": "Shared configuration for TokenTimer",
+  "main": "src/index.js",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.js",
+    "./network": "./src/network.js",
+    "./database": "./src/database.js"
+  },
+  "scripts": {
+    "test": "node --test src/**/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.0.0 <25.0.0"
+  },
+  "license": "AGPL-3.0-or-later"
+}
