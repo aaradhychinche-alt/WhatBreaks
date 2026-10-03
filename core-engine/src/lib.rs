@@ -9,11 +9,16 @@
 //! - [`resource`]: The foundational Entity / Resource model.
 //! - [`relationship`]: Directional relationship model between resource identities.
 //! - [`evidence`]: Point-in-time observation model (factual foundation for discovery).
+//! - [`discovery`]: Deterministic, evidence-backed relationship discovery engine.
 
+pub mod discovery;
 pub mod evidence;
 pub mod relationship;
 pub mod resource;
 
+pub use discovery::{
+    DiscoveredRelationship, DiscoveryEngine, DiscoveryResult, DiscoveryRule, RuntimeConnectionRule,
+};
 pub use evidence::{CollectorId, Evidence, EvidenceId, EvidenceSource, ObservationType};
 pub use relationship::{Relationship, RelationshipCategory, RelationshipKind};
 pub use resource::{
