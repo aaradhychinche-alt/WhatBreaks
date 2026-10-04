@@ -1,0 +1,216 @@
+// WhatBreaks Core Engine – Go ↔ Rust gRPC contract
+//
+// Package: wb.core.v1
+//
+// Design decisions preserved here:
+//   - ResourceIdentity (not ResourceId) is the cross-process resource identity.
+//   - Evidence.data is arbitrary JSON encoded as UTF-8 bytes.
+//   - ObservationType and RelationshipKind are open strings, not enums.
+//   - RelationshipCategory is an advisory string derived from kind.
+//   - DiscoveryResult uses oneof for the four deterministic outcomes.
+//   - observed_at uses RFC3339/ISO-8601 UTC string (no google.protobuf.Timestamp).
+//   - RunDiscovery is unary for v1. No streaming yet.
+//   - No confidence, no graph node IDs, no collector credentials,
+//     no Kubernetes-specific messages, no Resource.name/attributes/metadata.
+
+syntax = "proto3";
+
+package wb.core.v1;
+
+option go_package = "github.com/aaradhychinche-alt/WhatBreaks/gen/go/wb/core/v1;corev1";
+
+// ---------------------------------------------------------------------------
+// ResourceIdentity
+//
+// The real-world / provider identity of an infrastructure resource.
+// This is the cross-process identity. ResourceId (internal WB UUID) must
+// never cross this boundary.
+// ---------------------------------------------------------------------------
+message ResourceIdentity {
+  // The origin system. Examples: "kubernetes", "aws", "gcp", "internal".
+  // Open string — not an enum.
+  string provider = 1;
+
+  // Kind within the provider. Examples: "pod", "rds", "lambda", "repository".
+  // Open string — not an enum.
+  string resource_type = 2;
+
+  // Provider-native logical identifier.
+  // Examples: ARN, "namespace/name", "owner/repo",
+  //           "cluster/prod/namespace/payments/pod/api-abc".
+  string provider_id = 3;
+}
+
+// ---------------------------------------------------------------------------
+// EvidenceSource
+//
+// Provenance: which provider and which collector produced the observation.
+// ---------------------------------------------------------------------------
+message EvidenceSource {
+  // The infrastructure provider that was observed.
+  // Examples: "kubernetes", "aws", "gcp".
+  string provider = 1;
+
+  // The specific collector that produced the observation.
+  // Examples: "k8s-runtime", "aws-network", "gcp-vpc".
+  // Open string — not an enum.
+  string collector = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Evidence
+//
+// A single, immutable, point-in-time observation about an infrastructure
+// resource. This is the primary input to the discovery service.
+//
+// Evidence is immutable historical observation data. Each record has a
+// stable UUIDv4 identity.
+// ---------------------------------------------------------------------------
+message Evidence {
+  // UUIDv4 string. Stable, unique identity of this specific observation.
+  // Generated at observation time. Never reused.
+  string id = 1;
+
+  // Where this observation came from (provider + collector).
+  EvidenceSource source = 2;
+
+  // RFC 3339 / ISO 8601 UTC timestamp.
+  // Example: "2026-10-01T10:00:00Z"
+  // No google.protobuf.Timestamp dependency in v1.
+  string observed_at = 3;
+
+  // Semantic nature of the observation.
+  // Known values: "RUNTIME_CONNECTION", "CONFIGURATION",
+  //               "RESOURCE_REFERENCE", "OWNERSHIP_REFERENCE",
+  //               "NETWORK_OBSERVATION".
+  // Open string — new observation types can be added without schema changes.
+  string observation_type = 4;
+
+  // The resource this observation primarily concerns.
+  ResourceIdentity subject = 5;
+
+  // Structured observation payload, encoded as UTF-8 JSON bytes.
+  //
+  // The schema is determined by the collector and observation_type.
+  // The Core Engine does not validate or interpret this payload.
+  //
+  // Go side: treat as json.RawMessage ([]byte).
+  // Rust side: deserializes to serde_json::Value.
+  //
+  // Examples:
+  //   RUNTIME_CONNECTION: {"destination":"10.0.2.15","port":5432,"protocol":"tcp"}
+  //   RESOURCE_REFERENCE: {"address":"10.0.2.15","port":5432}
+  bytes data = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Relationship
+//
+// A directional link from source to target, typed by kind.
+// Identity is (source, target, kind). Category is advisory.
+// ---------------------------------------------------------------------------
+message Relationship {
+  // Origin resource of the directional relationship.
+  ResourceIdentity source = 1;
+
+  // Destination resource of the directional relationship.
+  ResourceIdentity target = 2;
+
+  // Specific kind of relationship.
+  // Known values: "DEPENDS_ON", "CALLS", "READS_FROM", "WRITES_TO",
+  //               "OWNS", "RUNS_ON", "AUTHORIZES".
+  // Open string — custom kinds (e.g. "PEERS_WITH") are valid.
+  string kind = 3;
+
+  // High-level classification, deterministically derived from kind in Rust.
+  // Known values: "Dependency", "DataFlow", "Invocation",
+  //               "Authorization", "Ownership", "Placement", "Network".
+  // Advisory: Go should not re-implement the derivation logic.
+  // Rust always re-derives this from kind when receiving a Relationship.
+  string category = 4;
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveredRelationship
+//
+// A relationship derived deterministically from evidence observations,
+// with a complete audit trail of supporting evidence IDs.
+// ---------------------------------------------------------------------------
+message DiscoveredRelationship {
+  // The derived directional relationship.
+  Relationship relationship = 1;
+
+  // UUIDv4 strings of all Evidence observations that caused this derivation.
+  // At least one entry is always present.
+  repeated string supporting_evidence_ids = 2;
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveryResult
+//
+// The outcome of applying a discovery rule to a batch of evidence.
+// Exactly one oneof variant is set per result.
+//
+// Maps directly to the Rust DiscoveryResult enum:
+//   Discovered(DiscoveredRelationship)  →  discovered
+//   Insufficient                        →  insufficient
+//   Conflict { description }            →  conflict
+//   Invalid   { description }           →  invalid
+// ---------------------------------------------------------------------------
+message DiscoveryResult {
+  oneof outcome {
+    // A relationship was deterministically derived from the evidence.
+    DiscoveredRelationship discovered = 1;
+
+    // Evidence exists but is insufficient to derive a relationship.
+    // Example: RUNTIME_CONNECTION observed but no RESOURCE_REFERENCE
+    // maps the endpoint to a known resource.
+    Insufficient insufficient = 2;
+
+    // Evidence is contradictory and cannot be deterministically resolved.
+    // Example: two RESOURCE_REFERENCE observations map the same endpoint
+    // to two different resources.
+    Conflict conflict = 3;
+
+    // Evidence was structurally malformed (missing required fields, etc.).
+    // The rule returned this rather than panicking.
+    Invalid invalid = 4;
+  }
+}
+
+// Unit type for the Insufficient variant.
+// oneof fields must be message types; Insufficient carries no payload.
+message Insufficient {}
+
+// Evidence is contradictory; deterministic resolution is not possible.
+message Conflict {
+  string description = 1;
+}
+
+// Evidence was structurally malformed and could not be processed.
+message Invalid {
+  string description = 1;
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveryService
+//
+// The single gRPC service exposed by the Rust Core Engine process.
+// v1 is unary (batch in, batch out). No streaming.
+// ---------------------------------------------------------------------------
+service DiscoveryService {
+  // Apply all registered discovery rules to the supplied evidence batch.
+  // Returns zero or more DiscoveryResult entries.
+  // Ordering of results corresponds to ordering of applied rules × evidence.
+  rpc RunDiscovery(RunDiscoveryRequest) returns (RunDiscoveryResponse);
+}
+
+// Input: a batch of evidence observations to run discovery against.
+message RunDiscoveryRequest {
+  repeated Evidence evidence = 1;
+}
+
+// Output: all discovery outcomes produced by all registered rules.
+message RunDiscoveryResponse {
+  repeated DiscoveryResult results = 1;
+}

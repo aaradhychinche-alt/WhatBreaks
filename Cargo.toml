@@ -1,0 +1,19 @@
+# WhatBreaks Rust Workspace
+#
+# This workspace groups all Rust crates in the WhatBreaks repository.
+#
+# Crates:
+#   core-engine       – authoritative domain types (Resource, Relationship,
+#                       Evidence, Discovery). Pure Rust, no network layer.
+#   core-engine-proto – generated protobuf/gRPC transport types for the
+#                       Go ↔ Rust boundary. No domain logic.
+#
+# Future crates (not yet created):
+#   core-engine-server – the Rust gRPC server that bridges domain ↔ proto.
+
+[workspace]
+resolver = "2"
+members = [
+    "core-engine",
+    "core-engine-proto",
+]

@@ -16,3 +16,9 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Go build cache (not source)
+# gen/go/ is intentionally committed (generated source, no protoc required to build)
+
+# Proto: generated Rust code lives in core-engine-proto/target/ (already covered above)
+# The .proto source and build.rs are committed; Rust gen happens at cargo build time.

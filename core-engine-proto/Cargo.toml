@@ -1,0 +1,21 @@
+[package]
+name = "wb-core-proto"
+version = "0.1.0"
+edition = "2021"
+description = "WhatBreaks Core Engine – generated protobuf/gRPC types (Rust)"
+license = "AGPL-3.0-or-later"
+
+# This crate contains ONLY generated protobuf/tonic types.
+# It deliberately does NOT contain any domain logic.
+# The existing wb-core-engine domain types are NOT replaced by these generated types.
+# These types exist solely for the Go ↔ Rust gRPC transport boundary.
+
+[dependencies]
+# prost: protobuf runtime for Rust
+prost = "0.13"
+# tonic: gRPC runtime (types + client/server traits; server impl is future work)
+tonic = { version = "0.12", default-features = false, features = ["codegen", "prost"] }
+
+[build-dependencies]
+# tonic-build: compile .proto → Rust at build time (no separate protoc plugin needed)
+tonic-build = "0.12"
