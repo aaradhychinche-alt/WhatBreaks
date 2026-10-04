@@ -24,18 +24,18 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 
 | # | Path | Responsibility | Dependencies | Consumers / Callers | Security Sensitivity | Go Destination | Priority | Classification |
 |---|------|----------------|--------------|---------------------|----------------------|----------------|----------|----------------|
-| 1 | `kubernetes/controller/config.js` | Controller environment validation, forbidden var checks, token file permission check, API URL parsing | `node:fs`, `node:url`, `./ports.js`, `@tokentimer/config` | `kubernetes/controller/index.js` | **HIGH** (Token file security, SSRF check) | `internal/config` | P1 | **MUST MIGRATE** |
+| 1 | `kubernetes/controller/config.js` | Controller environment validation, forbidden var checks, token file permission check, API URL parsing | `node:fs`, `node:url`, `./ports.js`, `@tokentimer/config` | `kubernetes/controller/index.js` | **HIGH** (Token file security, SSRF check) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 2 | `kubernetes/controller/health-server.js` | HTTP liveness (`/healthz`) and readiness (`/readyz`) probe server | `node:http` | `kubernetes/controller/index.js`, `lifecycle.js` | **LOW** (Liveness/Readiness probes) | `internal/health` | P1 | **MUST MIGRATE** |
 | 3 | `kubernetes/controller/lifecycle.js` | State management (`starting`, `running`, `stopping`, `stopped`), signal handling (SIGTERM, SIGINT), graceful timeout drain | None | `kubernetes/controller/index.js` | **MEDIUM** (Clean teardown, resource leak prevention) | `internal/lifecycle` | P1 | **MUST MIGRATE** |
 | 4 | `kubernetes/controller/runtime.js` | In-flight execution tracking (`trackWork`) and active task completion barrier | None | `kubernetes/controller/index.js` | **LOW** (Work state) | `internal/lifecycle` | P1 | **MUST MIGRATE** |
 | 5 | `kubernetes/controller/logger.js` | Controller JSON logger wrapping `@tokentimer/log-scrub` | `@tokentimer/log-scrub` | Controller modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MUST MIGRATE** |
-| 6 | `kubernetes/controller/ports.js` | Integer port parsing and range validation `[1, 65535]` | None | `kubernetes/controller/config.js` | **LOW** (Config validation) | `internal/config` | P1 | **MUST MIGRATE** |
+| 6 | `kubernetes/controller/ports.js` | Integer port parsing and range validation `[1, 65535]` | None | `kubernetes/controller/config.js` | **LOW** (Config validation) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 7 | `kubernetes/controller/index.js` | Controller bootstrapper; contains dummy stub objects for `kubernetesClient` & `reporter` | Controller submodules | Process execution | **MEDIUM** (Process entrypoint) | `cmd/wb` + `internal/platform` | P2 | **REPLACE / REDESIGN** |
 | 8 | `packages/log-scrub/index.js` | Field-name redaction rules and deep value sanitization | `./secret-material.js` | Loggers | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MUST MIGRATE** |
 | 9 | `packages/log-scrub/secret-material.js` | Content-based cryptographic secret/key detection (PEM, DER, PKCS#1/#8, SEC1, JKS magic, PFX) | `node:crypto`, `node:zlib` | `packages/log-scrub/index.js` | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MUST MIGRATE** |
-| 10 | `packages/config/src/database.js` | PostgreSQL connection config parsing, SSL mode flags, and connection pool parameters | None | `packages/config/src/index.js`, `workers/runtime/db.js` | **HIGH** (DB credentials & TLS) | `internal/config`, `internal/database` | P1 | **MUST MIGRATE** |
-| 11 | `packages/config/src/network.js` | Network allowlist validation, private IP and loopback blocking against SSRF | None | `kubernetes/controller/config.js` | **HIGH** (SSRF prevention) | `internal/config` | P1 | **MUST MIGRATE** |
-| 12 | `packages/config/src/index.js` | Aggregates DB/Network config, but also includes SMTP email and TokenTimer cert expiration alerts | `./database.js`, `./network.js` | Platform consumers | **HIGH** (Credentials) | `internal/config` (core only) | P1 | **REPLACE / REDESIGN** |
+| 10 | `packages/config/src/database.js` | PostgreSQL connection config parsing, SSL mode flags, and connection pool parameters | None | `packages/config/src/index.js`, `workers/runtime/db.js` | **HIGH** (DB credentials & TLS) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
+| 11 | `packages/config/src/network.js` | Network allowlist validation, private IP and loopback blocking against SSRF | None | `kubernetes/controller/config.js` | **HIGH** (SSRF prevention) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
+| 12 | `packages/config/src/index.js` | Aggregates DB/Network config, but also includes SMTP email and TokenTimer cert expiration alerts | `./database.js`, `./network.js` | Platform consumers | **HIGH** (Credentials) | `internal/config` (core only) | P1 | **MIGRATED (Step 5B.1)** |
 | 13 | `workers/runtime/db.js` | PostgreSQL connection pool, query wrapper, and advisory locking (`hash32` + `pg_try_advisory_lock`) | `pg`, `@tokentimer/config` | `workers/runtime/runner.js` | **HIGH** (Advisory locks & DB access) | `internal/database` | P1 | **MUST MIGRATE** |
 | 14 | `workers/runtime/is-node-entrypoint.js` | Checks `process.argv[1]` vs `import.meta.url` for CLI execution | `node:process`, `node:url` | `workers/runtime/runner.js` | **NONE** (Runtime glue) | None | N/A | **DISCARD** |
 | 15 | `workers/runtime/logger.js` | Worker runtime JSON logging with log scrubbing | `@tokentimer/log-scrub` | Worker modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MUST MIGRATE** |
@@ -217,12 +217,37 @@ internal/config  internal/health  internal/lifecycle internal/logging
 
 Based on the dependency analysis, the safest implementation sequence for future migration steps is:
 
-1. **Step 5B — Logging & Secret Scrubbing (`internal/logging`)**: Port `secret-material.js` and `log-scrub` into Go. All other packages require secure logging.
-2. **Step 5C — Configuration & Validation (`internal/config`)**: Port environment parsing, token file permissions enforcement, and network allowlist validation.
-3. **Step 5D — Health Server & Probes (`internal/health`)**: Port `/healthz` and `/readyz` HTTP server.
-4. **Step 5E — Lifecycle & Graceful Drain (`internal/lifecycle`)**: Port state machine, signal listeners, and in-flight work tracker.
-5. **Step 5F — Database & Advisory Locks (`internal/database`)**: Implement PostgreSQL pool and `hash32` advisory locking with `pgx`.
-6. **Step 5G — Authentication & Worker Auth (`internal/auth`)**: Port timing-safe worker token verification and session security helpers.
-7. **Step 5H — Scheduler & Task Runner (`internal/scheduler`)**: Implement cron/interval job scheduler and overlap prevention.
-8. **Step 5I — API Layer & Middleware (`internal/api`)**: Implement HTTP API, security headers, rate limiting, and route handlers.
-9. **Step 5J — Kubernetes Collector (`internal/collector/k8s`)**: Build new Go-native Kubernetes collector using `client-go` and feed evidence into `internal/coreclient`.
+1. **Step 5B.1 — Configuration Subsystem (`internal/config`)**: **COMPLETED ✅**
+2. **Step 5B.2 — Logging & Secret Scrubbing (`internal/logging`)**: Port `secret-material.js` and `log-scrub` into Go. All other packages require secure logging.
+3. **Step 5B.3 — Health Server & Probes (`internal/health`)**: Port `/healthz` and `/readyz` HTTP server.
+4. **Step 5B.4 — Lifecycle & Graceful Drain (`internal/lifecycle`)**: Port state machine, signal listeners, and in-flight work tracker.
+5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: Implement PostgreSQL pool and `hash32` advisory locking with `pgx`.
+6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: Port timing-safe worker token verification and session security helpers.
+7. **Step 5B.7 — Scheduler & Task Runner (`internal/scheduler`)**: Implement cron/interval job scheduler and overlap prevention.
+8. **Step 5B.8 — API Layer & Middleware (`internal/api`)**: Implement HTTP API, security headers, rate limiting, and route handlers.
+9. **Step 5B.9 — Kubernetes Collector (`internal/collector/k8s`)**: Build new Go-native Kubernetes collector using `client-go` and feed evidence into `internal/coreclient`.
+
+---
+
+## 8. Subsystem Migration Status: Step 5B.1 Configuration Subsystem
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Go Destination:** `internal/config/`
+  - `internal/config/controller.go`: Migrates `kubernetes/controller/config.js` (controller environment variables, forbidden variable checks, token file security, cluster ID, workspace UUID, watch namespaces, intervals, mode).
+  - `internal/config/ports.go`: Migrates port range validation `[1, 65535]` from `kubernetes/controller/ports.js` / `config.js`.
+  - `internal/config/database.go`: Migrates `packages/config/src/database.js` (Postgres connection parameters, connection pooling configuration, TLS/SSL modes, safe connection string generation).
+  - `internal/config/network.go`: Migrates `packages/config/src/network.js` (offline mode, allowlists with exact/wildcard/CIDR matching, webhook provider host allowlists, loopback/private IP detection).
+  - `internal/config/config.go`: Top-level composition migrating `packages/config/src/index.js` (general platform config, application security parameters, production session secret validation).
+  - `internal/config/env.go`: Zero-side-effect environment abstraction (`EnvLookup`, `MapEnv`, `OsEnv`) enabling deterministic unit testing.
+- **Tests Added:**
+  - `internal/config/controller_test.go`: Tests forbidden env vars, token file validation (permissions, format, null bytes, private keys), cluster ID RFC1123, workspace UUID, watch namespace policies, interval parsing, mode parsing, API URL validation.
+  - `internal/config/ports_test.go`: Tests boundary values 1, 65535, 0, 65536, negative, malformed string, and default fallback.
+  - `internal/config/database_test.go`: Tests defaults, custom overrides, port errors, SSL modes (verify, require, require-no-verify), and secret safety (password redacted in `GetSafeConnectionString`).
+  - `internal/config/network_test.go`: Tests offline mode, empty allowlist blocking, wildcard matching, CIDR 32-bit bitmask logic, webhook allowlists, and loopback/private IP checks.
+  - `internal/config/config_test.go`: Tests top-level `Load`, production requirements, and error safety.
+- **Intentionally Removed TokenTimer Functionality:**
+  - Discarded SMTP email configuration (`getEmailConfig`).
+  - Discarded certificate expiration warning alert thresholds (30, 14, 7, 1, 0 days) (`getAlertConfig`).
+  - Discarded TokenTimer variant branding (`brandName: TokenTimer`, `.tokentimer-variant`).
+- **Semantic Differences:** None. All observable behaviors, error codes, and security invariants from the JavaScript source have been preserved. Forward-compatible WhatBreaks environment variables (`WB_*`) are supported with full fallback to legacy `TOKENTIMER_*` / `CERTOPS_*` names.
+
