@@ -366,6 +366,17 @@ impl DiscoveryRule for RuntimeConnectionRule {
 /// Applies a set of [`DiscoveryRule`] implementations to a collection of
 /// [`Evidence`] observations and returns all [`DiscoveryResult`]s.
 ///
+/// # Architecture and Responsibilities
+///
+/// The engine is intentionally generic and thin:
+/// - It coordinates execution across a collection of heterogeneous [`DiscoveryRule`] implementations.
+/// - It passes the identical evidence slice to each registered rule.
+/// - It collects results in the exact order rules are registered.
+/// - It contains no domain-specific, provider-specific, or network-level logic (it knows nothing
+///   about addresses, ports, Kubernetes, AWS, etc.).
+/// - It does not deduplicate relationships or resolve conflicting results; deduplication and
+///   semantic identity management belong to the graph/relationship layer.
+///
 /// # Usage
 ///
 /// ```rust,ignore
@@ -395,16 +406,32 @@ impl DiscoveryEngine {
         Self::new(vec![Box::new(RuntimeConnectionRule)])
     }
 
+    /// Return the number of rules registered in this engine.
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
+    /// Return a slice of registered rules.
+    pub fn rules(&self) -> &[Box<dyn DiscoveryRule>] {
+        &self.rules
+    }
+
     /// Apply all rules to the given evidence and return all results.
     ///
-    /// Each rule contributes zero or more results. Results from all rules are
-    /// concatenated. The engine does not attempt to deduplicate results across
-    /// rules — callers may group by relationship identity if needed.
+    /// Each rule receives the identical evidence slice and contributes zero or more results.
+    /// Results from all rules are concatenated in registration order. The engine does not
+    /// attempt to deduplicate results across rules or resolve conflicts.
     pub fn run(&self, evidence: &[Evidence]) -> Vec<DiscoveryResult> {
         self.rules
             .iter()
             .flat_map(|rule| rule.apply(evidence))
             .collect()
+    }
+}
+
+impl Default for DiscoveryEngine {
+    fn default() -> Self {
+        Self::default_v1()
     }
 }
 
@@ -892,5 +919,426 @@ mod tests {
 
         // No RUNTIME_CONNECTION → rule returns nothing
         assert!(results.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Test-only Mock Discovery Rules (extensibility demonstration)
+    // -----------------------------------------------------------------------
+
+    /// Mock rule simulating ownership discovery (e.g. GitHub team OWNS Kubernetes service).
+    struct MockOwnershipRule;
+
+    impl DiscoveryRule for MockOwnershipRule {
+        fn name(&self) -> &str {
+            "MockOwnershipRule"
+        }
+
+        fn apply(&self, evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+            if evidence.is_empty() {
+                return Vec::new();
+            }
+            let team = ResourceIdentity::new(
+                Provider::new("github"),
+                ResourceKind::new("team"),
+                "payments-team",
+            );
+            let service = ResourceIdentity::new(
+                Provider::new("kubernetes"),
+                ResourceKind::new("service"),
+                "payments-service",
+            );
+            let rel = Relationship::new(team, service, RelationshipKind::OWNS);
+            vec![DiscoveryResult::Discovered(DiscoveredRelationship::new(
+                rel,
+                evidence.iter().map(|e| e.id).collect(),
+            ))]
+        }
+    }
+
+    /// Mock rule simulating configuration discovery (e.g. deployment DEPENDS_ON configmap).
+    struct MockConfigurationRule;
+
+    impl DiscoveryRule for MockConfigurationRule {
+        fn name(&self) -> &str {
+            "MockConfigurationRule"
+        }
+
+        fn apply(&self, evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+            if evidence.is_empty() {
+                return Vec::new();
+            }
+            let deployment = ResourceIdentity::new(
+                Provider::new("kubernetes"),
+                ResourceKind::new("deployment"),
+                "payments-api",
+            );
+            let configmap = ResourceIdentity::new(
+                Provider::new("kubernetes"),
+                ResourceKind::new("configmap"),
+                "payments-config",
+            );
+            let rel = Relationship::new(deployment, configmap, RelationshipKind::DEPENDS_ON);
+            vec![DiscoveryResult::Discovered(DiscoveredRelationship::new(
+                rel,
+                evidence.iter().map(|e| e.id).collect(),
+            ))]
+        }
+    }
+
+    /// Mock rule with configurable name and target identity, used to test execution ordering.
+    struct MockOrderedRule {
+        rule_name: &'static str,
+        target_id: &'static str,
+    }
+
+    impl DiscoveryRule for MockOrderedRule {
+        fn name(&self) -> &str {
+            self.rule_name
+        }
+
+        fn apply(&self, evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+            let src = ResourceIdentity::new(
+                Provider::new("internal"),
+                ResourceKind::new("service"),
+                "caller",
+            );
+            let tgt = ResourceIdentity::new(
+                Provider::new("internal"),
+                ResourceKind::new("service"),
+                self.target_id,
+            );
+            let rel = Relationship::new(src, tgt, RelationshipKind::CALLS);
+            vec![DiscoveryResult::Discovered(DiscoveredRelationship::new(
+                rel,
+                evidence.iter().map(|e| e.id).collect(),
+            ))]
+        }
+    }
+
+    /// Mock rule that always returns an empty vector of results.
+    struct MockEmptyRule;
+
+    impl DiscoveryRule for MockEmptyRule {
+        fn name(&self) -> &str {
+            "MockEmptyRule"
+        }
+
+        fn apply(&self, _evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+            Vec::new()
+        }
+    }
+
+    /// Mock rule that emits a fixed relationship (used to test deduplication non-occurrence).
+    struct MockDuplicateRule;
+
+    impl DiscoveryRule for MockDuplicateRule {
+        fn name(&self) -> &str {
+            "MockDuplicateRule"
+        }
+
+        fn apply(&self, evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+            let src = ResourceIdentity::new(
+                Provider::new("test"),
+                ResourceKind::new("service"),
+                "common-src",
+            );
+            let tgt = ResourceIdentity::new(
+                Provider::new("test"),
+                ResourceKind::new("service"),
+                "common-tgt",
+            );
+            let rel = Relationship::new(src, tgt, RelationshipKind::DEPENDS_ON);
+            vec![DiscoveryResult::Discovered(DiscoveredRelationship::new(
+                rel,
+                evidence.iter().map(|e| e.id).collect(),
+            ))]
+        }
+    }
+
+    /// Mock rule that emits a Conflict result.
+    struct MockConflictRule;
+
+    impl DiscoveryRule for MockConflictRule {
+        fn name(&self) -> &str {
+            "MockConflictRule"
+        }
+
+        fn apply(&self, _evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+            vec![DiscoveryResult::Conflict {
+                description: "ambiguous routing candidate".to_string(),
+            }]
+        }
+    }
+
+    /// Mock rule that captures observed EvidenceIds into a shared vector.
+    struct MockEvidenceRecordingRule {
+        captured_ids: std::sync::Arc<std::sync::Mutex<Vec<EvidenceId>>>,
+    }
+
+    impl DiscoveryRule for MockEvidenceRecordingRule {
+        fn name(&self) -> &str {
+            "MockEvidenceRecordingRule"
+        }
+
+        fn apply(&self, evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+            let mut ids = self.captured_ids.lock().unwrap();
+            *ids = evidence.iter().map(|e| e.id).collect();
+            Vec::new()
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 20. Engine extensible with multiple heterogeneous rules.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_engine_extensibility_with_multiple_heterogeneous_rules() {
+        let pod = pod_identity("payments-api");
+        let db = db_identity("payments-db");
+
+        let conn = connection_evidence(pod.clone(), "10.0.2.15", 5432);
+        let map = mapping_evidence(db.clone(), "10.0.2.15", 5432);
+        let evidence = vec![conn, map];
+
+        let engine = DiscoveryEngine::new(vec![
+            Box::new(RuntimeConnectionRule),
+            Box::new(MockOwnershipRule),
+            Box::new(MockConfigurationRule),
+        ]);
+
+        assert_eq!(engine.rule_count(), 3);
+        assert_eq!(engine.rules()[0].name(), "RuntimeConnectionRule");
+        assert_eq!(engine.rules()[1].name(), "MockOwnershipRule");
+        assert_eq!(engine.rules()[2].name(), "MockConfigurationRule");
+
+        let results = engine.run(&evidence);
+
+        // All three rules ran and produced their respective discoveries
+        assert_eq!(results.len(), 3);
+
+        // Result 0: RuntimeConnectionRule -> pod DEPENDS_ON db
+        let r0 = results[0]
+            .discovered()
+            .expect("result 0 should be Discovered");
+        assert_eq!(r0.relationship.source, pod);
+        assert_eq!(r0.relationship.target, db);
+        assert_eq!(r0.relationship.kind, RelationshipKind::DEPENDS_ON);
+
+        // Result 1: MockOwnershipRule -> team OWNS service
+        let r1 = results[1]
+            .discovered()
+            .expect("result 1 should be Discovered");
+        assert_eq!(r1.relationship.source.provider.as_str(), "github");
+        assert_eq!(r1.relationship.source.resource_type.as_str(), "team");
+        assert_eq!(r1.relationship.source.provider_id.as_str(), "payments-team");
+        assert_eq!(r1.relationship.kind, RelationshipKind::OWNS);
+
+        // Result 2: MockConfigurationRule -> deployment DEPENDS_ON configmap
+        let r2 = results[2]
+            .discovered()
+            .expect("result 2 should be Discovered");
+        assert_eq!(r2.relationship.source.resource_type.as_str(), "deployment");
+        assert_eq!(r2.relationship.target.resource_type.as_str(), "configmap");
+        assert_eq!(r2.relationship.kind, RelationshipKind::DEPENDS_ON);
+    }
+
+    // -----------------------------------------------------------------------
+    // 21. Engine preserves rule execution order in output results.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_engine_preserves_rule_execution_order() {
+        let pod = pod_identity("payments-api");
+        let conn = connection_evidence(pod, "10.0.2.15", 5432);
+        let evidence = vec![conn];
+
+        // Register in order: RuleA, RuleB, RuleC
+        let engine_abc = DiscoveryEngine::new(vec![
+            Box::new(MockOrderedRule {
+                rule_name: "RuleA",
+                target_id: "target-a",
+            }),
+            Box::new(MockOrderedRule {
+                rule_name: "RuleB",
+                target_id: "target-b",
+            }),
+            Box::new(MockOrderedRule {
+                rule_name: "RuleC",
+                target_id: "target-c",
+            }),
+        ]);
+
+        let results_abc = engine_abc.run(&evidence);
+        assert_eq!(results_abc.len(), 3);
+        let targets_abc: Vec<&str> = results_abc
+            .iter()
+            .map(|r| {
+                r.discovered()
+                    .unwrap()
+                    .relationship
+                    .target
+                    .provider_id
+                    .as_str()
+            })
+            .collect();
+        assert_eq!(targets_abc, vec!["target-a", "target-b", "target-c"]);
+
+        // Register in different order: RuleC, RuleA, RuleB
+        let engine_cab = DiscoveryEngine::new(vec![
+            Box::new(MockOrderedRule {
+                rule_name: "RuleC",
+                target_id: "target-c",
+            }),
+            Box::new(MockOrderedRule {
+                rule_name: "RuleA",
+                target_id: "target-a",
+            }),
+            Box::new(MockOrderedRule {
+                rule_name: "RuleB",
+                target_id: "target-b",
+            }),
+        ]);
+
+        let results_cab = engine_cab.run(&evidence);
+        assert_eq!(results_cab.len(), 3);
+        let targets_cab: Vec<&str> = results_cab
+            .iter()
+            .map(|r| {
+                r.discovered()
+                    .unwrap()
+                    .relationship
+                    .target
+                    .provider_id
+                    .as_str()
+            })
+            .collect();
+        assert_eq!(targets_cab, vec!["target-c", "target-a", "target-b"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // 22. Empty engine behaves correctly.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_empty_engine_behaves_correctly() {
+        let engine = DiscoveryEngine::new(vec![]);
+        assert_eq!(engine.rule_count(), 0);
+        assert!(engine.rules().is_empty());
+
+        let pod = pod_identity("payments-api");
+        let conn = connection_evidence(pod, "10.0.2.15", 5432);
+
+        // Run with evidence
+        let results_with_evidence = engine.run(&[conn]);
+        assert!(results_with_evidence.is_empty());
+
+        // Run without evidence
+        let results_empty = engine.run(&[]);
+        assert!(results_empty.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // 23. One rule returning no results does not prevent subsequent rules.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_empty_rule_result_does_not_prevent_subsequent_rules() {
+        let pod = pod_identity("payments-api");
+        let db = db_identity("payments-db");
+        let conn = connection_evidence(pod, "10.0.2.15", 5432);
+        let map = mapping_evidence(db, "10.0.2.15", 5432);
+        let evidence = vec![conn, map];
+
+        // Register:
+        // 1. MockEmptyRule (returns 0 results)
+        // 2. RuntimeConnectionRule (returns 1 result)
+        // 3. MockEmptyRule (returns 0 results)
+        // 4. MockOwnershipRule (returns 1 result)
+        let engine = DiscoveryEngine::new(vec![
+            Box::new(MockEmptyRule),
+            Box::new(RuntimeConnectionRule),
+            Box::new(MockEmptyRule),
+            Box::new(MockOwnershipRule),
+        ]);
+
+        let results = engine.run(&evidence);
+        assert_eq!(results.len(), 2);
+        assert_eq!(
+            results[0].discovered().unwrap().relationship.kind,
+            RelationshipKind::DEPENDS_ON
+        );
+        assert_eq!(
+            results[1].discovered().unwrap().relationship.kind,
+            RelationshipKind::OWNS
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 24. Engine does not deduplicate relationships across rules.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_engine_does_not_deduplicate_across_rules() {
+        let engine = DiscoveryEngine::new(vec![
+            Box::new(MockDuplicateRule),
+            Box::new(MockDuplicateRule),
+        ]);
+
+        let pod = pod_identity("payments-api");
+        let conn = connection_evidence(pod, "10.0.2.15", 5432);
+
+        let results = engine.run(&[conn]);
+        // The engine must preserve both discoveries; deduplication belongs to graph layer
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], results[1]);
+    }
+
+    // -----------------------------------------------------------------------
+    // 25. Engine preserves Conflict results without resolving or dropping them.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_engine_preserves_conflict_results_without_resolving() {
+        let engine = DiscoveryEngine::new(vec![
+            Box::new(MockOwnershipRule),
+            Box::new(MockConflictRule),
+        ]);
+
+        let pod = pod_identity("payments-api");
+        let conn = connection_evidence(pod, "10.0.2.15", 5432);
+
+        let results = engine.run(&[conn]);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_discovered());
+        assert!(results[1].is_conflict());
+
+        if let DiscoveryResult::Conflict { description } = &results[1] {
+            assert_eq!(description, "ambiguous routing candidate");
+        } else {
+            panic!("expected Conflict result variant");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 26. Engine passes the identical evidence slice to all registered rules.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_engine_passes_identical_evidence_to_all_rules() {
+        let captured_1 = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_2 = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
+        let engine = DiscoveryEngine::new(vec![
+            Box::new(MockEvidenceRecordingRule {
+                captured_ids: std::sync::Arc::clone(&captured_1),
+            }),
+            Box::new(MockEvidenceRecordingRule {
+                captured_ids: std::sync::Arc::clone(&captured_2),
+            }),
+        ]);
+
+        let pod = pod_identity("payments-api");
+        let db = db_identity("payments-db");
+        let conn = connection_evidence(pod, "10.0.2.15", 5432);
+        let map = mapping_evidence(db, "10.0.2.15", 5432);
+        let expected_ids = vec![conn.id, map.id];
+
+        let _ = engine.run(&[conn, map]);
+
+        assert_eq!(*captured_1.lock().unwrap(), expected_ids);
+        assert_eq!(*captured_2.lock().unwrap(), expected_ids);
     }
 }
