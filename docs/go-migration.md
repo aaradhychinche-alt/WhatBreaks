@@ -28,17 +28,17 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 2 | `kubernetes/controller/health-server.js` | HTTP liveness (`/healthz`) and readiness (`/readyz`) probe server | `node:http` | `kubernetes/controller/index.js`, `lifecycle.js` | **LOW** (Liveness/Readiness probes) | `internal/health` | P1 | **MUST MIGRATE** |
 | 3 | `kubernetes/controller/lifecycle.js` | State management (`starting`, `running`, `stopping`, `stopped`), signal handling (SIGTERM, SIGINT), graceful timeout drain | None | `kubernetes/controller/index.js` | **MEDIUM** (Clean teardown, resource leak prevention) | `internal/lifecycle` | P1 | **MUST MIGRATE** |
 | 4 | `kubernetes/controller/runtime.js` | In-flight execution tracking (`trackWork`) and active task completion barrier | None | `kubernetes/controller/index.js` | **LOW** (Work state) | `internal/lifecycle` | P1 | **MUST MIGRATE** |
-| 5 | `kubernetes/controller/logger.js` | Controller JSON logger wrapping `@tokentimer/log-scrub` | `@tokentimer/log-scrub` | Controller modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MUST MIGRATE** |
+| 5 | `kubernetes/controller/logger.js` | Controller JSON logger wrapping `@tokentimer/log-scrub` | `@tokentimer/log-scrub` | Controller modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 6 | `kubernetes/controller/ports.js` | Integer port parsing and range validation `[1, 65535]` | None | `kubernetes/controller/config.js` | **LOW** (Config validation) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 7 | `kubernetes/controller/index.js` | Controller bootstrapper; contains dummy stub objects for `kubernetesClient` & `reporter` | Controller submodules | Process execution | **MEDIUM** (Process entrypoint) | `cmd/wb` + `internal/platform` | P2 | **REPLACE / REDESIGN** |
-| 8 | `packages/log-scrub/index.js` | Field-name redaction rules and deep value sanitization | `./secret-material.js` | Loggers | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MUST MIGRATE** |
-| 9 | `packages/log-scrub/secret-material.js` | Content-based cryptographic secret/key detection (PEM, DER, PKCS#1/#8, SEC1, JKS magic, PFX) | `node:crypto`, `node:zlib` | `packages/log-scrub/index.js` | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MUST MIGRATE** |
+| 8 | `packages/log-scrub/index.js` | Field-name redaction rules and deep value sanitization | `./secret-material.js` | Loggers | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
+| 9 | `packages/log-scrub/secret-material.js` | Content-based cryptographic secret/key detection (PEM, DER, PKCS#1/#8, SEC1, JKS magic, PFX) | `node:crypto`, `node:zlib` | `packages/log-scrub/index.js` | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 10 | `packages/config/src/database.js` | PostgreSQL connection config parsing, SSL mode flags, and connection pool parameters | None | `packages/config/src/index.js`, `workers/runtime/db.js` | **HIGH** (DB credentials & TLS) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 11 | `packages/config/src/network.js` | Network allowlist validation, private IP and loopback blocking against SSRF | None | `kubernetes/controller/config.js` | **HIGH** (SSRF prevention) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 12 | `packages/config/src/index.js` | Aggregates DB/Network config, but also includes SMTP email and TokenTimer cert expiration alerts | `./database.js`, `./network.js` | Platform consumers | **HIGH** (Credentials) | `internal/config` (core only) | P1 | **MIGRATED (Step 5B.1)** |
 | 13 | `workers/runtime/db.js` | PostgreSQL connection pool, query wrapper, and advisory locking (`hash32` + `pg_try_advisory_lock`) | `pg`, `@tokentimer/config` | `workers/runtime/runner.js` | **HIGH** (Advisory locks & DB access) | `internal/database` | P1 | **MUST MIGRATE** |
 | 14 | `workers/runtime/is-node-entrypoint.js` | Checks `process.argv[1]` vs `import.meta.url` for CLI execution | `node:process`, `node:url` | `workers/runtime/runner.js` | **NONE** (Runtime glue) | None | N/A | **DISCARD** |
-| 15 | `workers/runtime/logger.js` | Worker runtime JSON logging with log scrubbing | `@tokentimer/log-scrub` | Worker modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MUST MIGRATE** |
+| 15 | `workers/runtime/logger.js` | Worker runtime JSON logging with log scrubbing | `@tokentimer/log-scrub` | Worker modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 16 | `workers/runtime/metrics.js` | Prometheus metrics for TokenTimer certificate alert queues and digests | `prom-client` | Worker runtime | **LOW** (Telemetry) | `internal/metrics` (future) | P3 | **REPLACE / REDESIGN** |
 | 17 | `workers/runtime/proxy-compat-check.js` | Warns if Node.js runtime does not support `NODE_USE_ENV_PROXY=1` | `@tokentimer/node-compat` | `workers/runtime/runner.js` | **NONE** (Runtime glue) | None (Go stdlib handles proxies) | N/A | **DISCARD** |
 | 18 | `workers/runtime/runner.js` | 5-field cron parser, lookahead calendar calculation, interval timer, overlap prevention, `--once` mode | `./db.js`, `./logger.js`, `./is-node-entrypoint.js` | Worker runners | **MEDIUM** (Task concurrency & execution) | `internal/scheduler` | P2 | **SHOULD MIGRATE / REPLACE** |
@@ -54,7 +54,7 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 28 | `infrastructure/auth/workspace-access-policy.js` | `hideWorkspaceExistence` policy returning 404 instead of 403 on denied workspaces | None | Route handlers | **MEDIUM** (Workspace enumeration prevention) | `internal/auth` | P2 | **SHOULD MIGRATE / REPLACE** |
 | 29 | `infrastructure/config/runtime-labels.js` | Reads `.tokentimer-variant`, `TT_MODE`, `TT_VARIANT` for SaaS/OSS labeling | `node:fs`, `node:path` | `logger.js` | **NONE** (Branding) | None | N/A | **DISCARD** |
 | 30 | `infrastructure/database/database.js` | PostgreSQL pool creation, TLS configuration (`TLSv1.3`), `waitForDatabase`, query instrumentation | `pg`, `prom-client`, `logger.js` | Infrastructure repos | **HIGH** (Postgres connectivity & TLS) | `internal/database` | P1 | **MUST MIGRATE** |
-| 31 | `infrastructure/utils/logger.js` | Winston logger with sensitive key redaction, value scrubbing, JSON ordering | `winston`, `prom-client`, `log-scrub` | Infrastructure modules | **HIGH** (Zero Secret Custody in logs) | `internal/logging` | P1 | **MUST MIGRATE** |
+| 31 | `infrastructure/utils/logger.js` | Winston logger with sensitive key redaction, value scrubbing, JSON ordering | `winston`, `prom-client`, `log-scrub` | Infrastructure modules | **HIGH** (Zero Secret Custody in logs) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 
 ---
 
@@ -218,7 +218,7 @@ internal/config  internal/health  internal/lifecycle internal/logging
 Based on the dependency analysis, the safest implementation sequence for future migration steps is:
 
 1. **Step 5B.1 — Configuration Subsystem (`internal/config`)**: **COMPLETED ✅**
-2. **Step 5B.2 — Logging & Secret Scrubbing (`internal/logging`)**: Port `secret-material.js` and `log-scrub` into Go. All other packages require secure logging.
+2. **Step 5B.2 — Logging & Secret Scrubbing (`internal/logging`)**: **COMPLETED ✅**
 3. **Step 5B.3 — Health Server & Probes (`internal/health`)**: Port `/healthz` and `/readyz` HTTP server.
 4. **Step 5B.4 — Lifecycle & Graceful Drain (`internal/lifecycle`)**: Port state machine, signal listeners, and in-flight work tracker.
 5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: Implement PostgreSQL pool and `hash32` advisory locking with `pgx`.
@@ -250,4 +250,62 @@ Based on the dependency analysis, the safest implementation sequence for future 
   - Discarded certificate expiration warning alert thresholds (30, 14, 7, 1, 0 days) (`getAlertConfig`).
   - Discarded TokenTimer variant branding (`brandName: TokenTimer`, `.tokentimer-variant`).
 - **Semantic Differences:** None. All observable behaviors, error codes, and security invariants from the JavaScript source have been preserved. Forward-compatible WhatBreaks environment variables (`WB_*`) are supported with full fallback to legacy `TOKENTIMER_*` / `CERTOPS_*` names.
+
+---
+
+## 9. Subsystem Migration Status: Step 5B.2 Logging & Secret Scrubbing Subsystem
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Files Inspected:**
+  1. `kubernetes/controller/logger.js`: Controller JSON logger wrapping `@tokentimer/log-scrub` with service identity `tokentimer-k8s-controller`.
+  2. `workers/runtime/logger.js`: Worker runtime logging with Winston format pipeline, colorized dev output, timestamped staging output, error counter metrics, and `@tokentimer/log-scrub` redaction.
+  3. `infrastructure/utils/logger.js`: Winston infrastructure logger with field ordering `LOG_FIELD_ORDER = ["level", "message", "service", "timestamp"]`, `REDACT_FIELDS` list, `isSensitiveKey` pattern matching, client IP normalization `resolveClientIp`, and `safeErrorName`.
+  4. `packages/log-scrub/index.js`: Main scrubbing facade providing `isSensitiveKey`, `scrubLogString`, `scrubBuffer`, `redactSensitiveFields` (depth limit 8, circular pointer tracking `[REDACTED:circular]`), and `sanitizeLogRecord`.
+  5. `packages/log-scrub/secret-material.js`: Core cryptographic detector and redactor covering PEM private keys, PKCS#12 bundles, DER private keys, JKS keystore magic `0xfeedfeed`, base64/base64url/hex unwrapping, fail-closed gzip and zlib decompression (1 MiB input cap, 4 MiB output cap, ratio 4, preset dictionary rejection, nested compression fail-closed rejection), Authorization headers, Cookies, and generic secret assignments.
+- **Go Destination:** `internal/logging/`
+  - `internal/logging/secret_material.go`: Complete cryptographic secret detection and redaction engine. Faithfully implements all PEM/DER/JKS/PKCS#12 patterns, base64/base64url/hex unwrappers, and bounded RFC 1950 zlib / gzip inspection with fail-closed rejection.
+  - `internal/logging/scrub.go`: Deep structure scrubbing, field-name sensitivity checks, circular reference protection, error sanitization, client IP resolution, and root log record sanitization.
+  - `internal/logging/logger.go`: Thread-safe `JSONLogger` implementing deterministic field serialization (`level`, `message`, `service`, `timestamp`, then sorted extra fields) with automatic secret scrubbing interceptor before emission. Exposes `With`, `Named`, `Level`, `WithContext`, and `FromContext`.
+- **Tests Added:**
+  - `internal/logging/secret_material_test.go`:
+    - PEM private key variants (RSA, EC, PKCS#8) detected and redacted.
+    - Public certificates and public keys remain intact without modification.
+    - Base64, base64url, and hex-encoded private keys detected and redacted.
+    - DER structures: PKCS#12 bundle, DER private key, and JKS keystores (`0xfeedfeed`).
+    - Compressed buffers: gzip, zlib, and nested compression fail-closed rejection.
+    - Generic secrets: Authorization (Bearer/Basic), Cookie, Set-Cookie, X-API-Key, password quotes/unquoted, client secrets, and AWS secret access keys.
+    - Sensitive vs non-sensitive field names.
+  - `internal/logging/scrub_test.go`:
+    - `IsSensitiveKey` pattern and fragment matching.
+    - `ScrubLogString` free-form text redaction.
+    - `ScrubBuffer` fail-closed binary handling.
+    - `ResolveClientIP` parsing and extraction.
+    - `RedactSensitiveFields` map, slice, struct, and primitive traversal.
+    - `ErrorSerialization` error message scrubbing and `SafeErrorName`.
+    - `CircularReferences` cycle protection returning `[REDACTED:circular]`.
+    - `MaxDepth` nesting limit at depth 8.
+    - `SanitizeLogRecord` message preserving with content scrubbing vs sensitive metadata keys redacted outright.
+  - `internal/logging/logger_test.go`:
+    - Log levels and level filtering (`debug`, `info`, `warn`, `error`).
+    - Deterministic field ordering in JSON output.
+    - Service and component tagging via `Named` and `With`.
+    - Security Invariant: raw secrets in message, metadata, or error structs NEVER appear in output.
+    - Public certificates preserved in log output.
+    - High-concurrency logging across 50 goroutines.
+    - Context propagation (`WithContext`, `FromContext`).
+- **Security Invariants Preserved:**
+  - **Zero Secret Custody in Logs:** The logger intercepts all records through `SanitizeLogRecord`. Raw passwords, API tokens, bearer authorization credentials, session cookies, and private key material never reach log output.
+  - **Conservative Fail-Closed Handling:** Binary buffers, nested compressed payloads, malformed DER blobs, and oversized compressed payloads fail closed and are redacted/rejected.
+  - **Deterministic JSON Line Output:** Log records are consistently ordered with keys `level`, `message`, `service`, `timestamp` followed by alphabetically sorted extra metadata keys.
+- **Intentionally Removed TokenTimer Functionality:**
+  - Discarded TokenTimer-specific Prometheus counter metrics `cLogError` on `tokentimer-worker` queues.
+  - Discarded `.tokentimer-variant` file reading and SaaS mode branching (`runtime-labels.js`).
+  - Discarded Winston console colorizers and simple text formatters in favor of structured JSON lines.
+- **Semantic Differences:** None in security or log record semantics. All redaction rules, regex patterns, delimiters, and placeholders (`[REDACTED]`, `[PRIVATE_KEY_REDACTED]`, `[REDACTED:circular]`) exactly mirror the JavaScript source.
+- **Untouched Source Files:**
+  - `kubernetes/controller/logger.js` (UNTOUCHED)
+  - `workers/runtime/logger.js` (UNTOUCHED)
+  - `infrastructure/utils/logger.js` (UNTOUCHED)
+  - `packages/log-scrub/index.js` (UNTOUCHED)
+  - `packages/log-scrub/secret-material.js` (UNTOUCHED)
 
