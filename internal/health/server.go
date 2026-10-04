@@ -2,94 +2,236 @@ package health
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
 	"net/http"
-	"sync/atomic"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
 )
 
-const (
-	PathHealthz = "/healthz"
-	PathReadyz  = "/readyz"
-
-	BodyHealthy     = "ok"
-	BodyUnavailable = "unavailable"
-	BodyReady       = "ready"
-	BodyNotReady    = "not_ready"
+var (
+	ErrServerAlreadyRunning = errors.New("health server is already running")
+	ErrServerNotRunning     = errors.New("health server is not running")
+	ErrMissingStatusFunc    = errors.New("getStatus provider is required")
 )
 
-// Checker evaluates liveness and readiness of the platform process.
-type Checker interface {
-	IsHealthy() bool
-	IsReady() bool
+// WritePublicResponse writes a JSON response matching writePublicResponse from
+// kubernetes/controller/health-server.js.
+func WritePublicResponse(w http.ResponseWriter, statusCode int, payload any) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Length", "24")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"unavailable"}`))
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.WriteHeader(statusCode)
+	_, _ = w.Write(body)
 }
 
-// State provides a lock-free, atomic state holder for health and readiness probes.
-type State struct {
-	healthy atomic.Bool
-	ready   atomic.Bool
+// ControllerHealthHandler returns an http.Handler implementing the exact routing
+// and response behavior of kubernetes/controller/health-server.js.
+func ControllerHealthHandler(provider StatusProvider) http.Handler {
+	if provider == nil {
+		provider = CheckerStatusAdapter{Checker: nil}
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Matching JS: if (req.method !== "GET") return writePublicResponse(res, 404, { status: "not_found" });
+		if r.Method != http.MethodGet {
+			WritePublicResponse(w, http.StatusNotFound, ProbeResponse{Status: StatusNotFound})
+			return
+		}
+
+		status := provider.Status()
+		switch r.URL.Path {
+		case PathHealthz:
+			if status.Healthy {
+				WritePublicResponse(w, http.StatusOK, ProbeResponse{Status: StatusOk})
+			} else {
+				WritePublicResponse(w, http.StatusServiceUnavailable, ProbeResponse{Status: StatusUnavailable})
+			}
+		case PathReadyz:
+			if status.Ready {
+				WritePublicResponse(w, http.StatusOK, ProbeResponse{Status: StatusReady})
+			} else {
+				WritePublicResponse(w, http.StatusServiceUnavailable, ProbeResponse{Status: StatusNotReady})
+			}
+		default:
+			WritePublicResponse(w, http.StatusNotFound, ProbeResponse{Status: StatusNotFound})
+		}
+	})
 }
 
-// NewState creates a State with healthy=true and ready=false by default.
-func NewState() *State {
-	s := &State{}
-	s.healthy.Store(true)
-	s.ready.Store(false)
-	return s
-}
-
-func (s *State) IsHealthy() bool {
-	return s.healthy.Load()
-}
-
-func (s *State) IsReady() bool {
-	return s.ready.Load()
-}
-
-func (s *State) SetHealthy(val bool) {
-	s.healthy.Store(val)
-}
-
-func (s *State) SetReady(val bool) {
-	s.ready.Store(val)
-}
-
-// Handler returns an http.Handler implementing the /healthz and /readyz probe contract.
+// Handler returns an http.Handler implementing probe endpoints.
+// Maintained for backward compatibility with Step 5A scaffolding.
 func Handler(checker Checker) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc(PathHealthz, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			_, _ = w.Write([]byte("method_not_allowed"))
-			return
-		}
-		if checker != nil && checker.IsHealthy() {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(BodyHealthy))
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(BodyUnavailable))
-		}
-	})
-
-	mux.HandleFunc(PathReadyz, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-			_, _ = w.Write([]byte("method_not_allowed"))
-			return
-		}
-		if checker != nil && checker.IsReady() {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(BodyReady))
-		} else {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(BodyNotReady))
-		}
-	})
-
-	return mux
+	return ControllerHealthHandler(CheckerStatusAdapter{Checker: checker})
 }
 
-// Server defines the HTTP health probe listener contract.
-type Server interface {
-	Start(ctx context.Context) error
-	Shutdown(ctx context.Context) error
+// Server represents an HTTP probe listener for the Kubernetes controller.
+type Server struct {
+	mu         sync.Mutex
+	host       string
+	port       int
+	provider   StatusProvider
+	logger     logging.Logger
+	listener   net.Listener
+	httpServer *http.Server
+	serving    bool
+}
+
+// NewServer constructs a Server configured with host, port, status provider, and logger.
+func NewServer(host string, port int, provider StatusProvider, logger logging.Logger) *Server {
+	if host == "" {
+		host = DefaultHost
+	}
+	if port <= 0 {
+		port = DefaultPort
+	}
+	if logger == nil {
+		logger = logging.NewStandardLogger(nil, logging.LevelInfo)
+	}
+
+	return &Server{
+		host:     host,
+		port:     port,
+		provider: provider,
+		logger:   logger,
+	}
+}
+
+// Listen binds the network listener on the configured host and port without starting the accept loop.
+func (s *Server) Listen() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.listener != nil {
+		return ErrServerAlreadyRunning
+	}
+
+	addr := fmt.Sprintf("%s:%d", s.host, s.port)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to bind health server on %s: %w", addr, err)
+	}
+
+	s.listener = ln
+	s.httpServer = &http.Server{
+		Handler:      ControllerHealthHandler(s.provider),
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+	}
+
+	return nil
+}
+
+// Start binds and starts serving health requests in a background goroutine.
+func (s *Server) Start(ctx context.Context) error {
+	s.mu.Lock()
+	if s.serving {
+		s.mu.Unlock()
+		return ErrServerAlreadyRunning
+	}
+
+	if s.listener == nil {
+		addr := fmt.Sprintf("%s:%d", s.host, s.port)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("failed to bind health server on %s: %w", addr, err)
+		}
+		s.listener = ln
+		s.httpServer = &http.Server{
+			Handler:      ControllerHealthHandler(s.provider),
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 5 * time.Second,
+		}
+	}
+
+	s.serving = true
+	ln := s.listener
+	srv := s.httpServer
+	s.mu.Unlock()
+
+	s.logger.Info("health server listening",
+		"host", s.host,
+		"port", s.Port(),
+		"addr", ln.Addr().String(),
+	)
+
+	go func() {
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			s.logger.Error("health server serve error", "error", err)
+		}
+	}()
+
+	return nil
+}
+
+// Addr returns the net.Addr of the active listener, or nil if not listening.
+func (s *Server) Addr() net.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listener == nil {
+		return nil
+	}
+	return s.listener.Addr()
+}
+
+// Port returns the bound TCP port (useful when port 0 is used for ephemeral allocation).
+func (s *Server) Port() int {
+	addr := s.Addr()
+	if addr == nil {
+		return s.port
+	}
+	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+		return tcpAddr.Port
+	}
+	return s.port
+}
+
+// Shutdown gracefully terminates the HTTP health server.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	srv := s.httpServer
+	s.serving = false
+	s.mu.Unlock()
+
+	if srv == nil {
+		return nil
+	}
+
+	return srv.Shutdown(ctx)
+}
+
+// Close immediately closes the HTTP health server and listener.
+func (s *Server) Close() error {
+	s.mu.Lock()
+	srv := s.httpServer
+	ln := s.listener
+	s.httpServer = nil
+	s.listener = nil
+	s.serving = false
+	s.mu.Unlock()
+
+	var err error
+	if srv != nil {
+		err = srv.Close()
+	}
+	if ln != nil {
+		if lnErr := ln.Close(); lnErr != nil && err == nil {
+			err = lnErr
+		}
+	}
+	return err
 }

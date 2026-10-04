@@ -25,7 +25,7 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | # | Path | Responsibility | Dependencies | Consumers / Callers | Security Sensitivity | Go Destination | Priority | Classification |
 |---|------|----------------|--------------|---------------------|----------------------|----------------|----------|----------------|
 | 1 | `kubernetes/controller/config.js` | Controller environment validation, forbidden var checks, token file permission check, API URL parsing | `node:fs`, `node:url`, `./ports.js`, `@tokentimer/config` | `kubernetes/controller/index.js` | **HIGH** (Token file security, SSRF check) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
-| 2 | `kubernetes/controller/health-server.js` | HTTP liveness (`/healthz`) and readiness (`/readyz`) probe server | `node:http` | `kubernetes/controller/index.js`, `lifecycle.js` | **LOW** (Liveness/Readiness probes) | `internal/health` | P1 | **MUST MIGRATE** |
+| 2 | `kubernetes/controller/health-server.js` | HTTP liveness (`/healthz`) and readiness (`/readyz`) probe server | `node:http` | `kubernetes/controller/index.js`, `lifecycle.js` | **LOW** (Liveness/Readiness probes) | `internal/health` | P1 | **MIGRATED (Step 5B.3)** |
 | 3 | `kubernetes/controller/lifecycle.js` | State management (`starting`, `running`, `stopping`, `stopped`), signal handling (SIGTERM, SIGINT), graceful timeout drain | None | `kubernetes/controller/index.js` | **MEDIUM** (Clean teardown, resource leak prevention) | `internal/lifecycle` | P1 | **MUST MIGRATE** |
 | 4 | `kubernetes/controller/runtime.js` | In-flight execution tracking (`trackWork`) and active task completion barrier | None | `kubernetes/controller/index.js` | **LOW** (Work state) | `internal/lifecycle` | P1 | **MUST MIGRATE** |
 | 5 | `kubernetes/controller/logger.js` | Controller JSON logger wrapping `@tokentimer/log-scrub` | `@tokentimer/log-scrub` | Controller modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
@@ -45,7 +45,7 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 19 | `infrastructure/api/index.js` | Express HTTP server setup (Helmet security headers, CORS, body size limits, error handling) | `express`, `cors`, `helmet`, `./routes/health.js` | API entrypoint | **HIGH** (API boundary security) | `internal/api` | P2 | **REPLACE / REDESIGN** |
 | 20 | `infrastructure/api/middleware/csrf.js` | Double-submit cookie CSRF protection | `csrf-csrf`, `session-cookie-options.js` | `infrastructure/api/index.js` | **HIGH** (Web CSRF defense) | `internal/api/middleware` | P2 | **SHOULD MIGRATE / REPLACE** |
 | 21 | `infrastructure/api/middleware/rateLimit.js` | Global, slowdown, and authenticated user/IP rate limiters | `express-rate-limit`, `express-slow-down` | `infrastructure/api/index.js` | **HIGH** (Abuse prevention) | `internal/api/middleware` | P2 | **SHOULD MIGRATE / REPLACE** |
-| 22 | `infrastructure/api/routes/health.js` | API health routes: `GET /` and `GET /health` (`SELECT 1` ping, uptime) | `express`, `database.js` | `infrastructure/api/index.js` | **LOW** (Service health) | `internal/api` / `internal/health` | P2 | **SHOULD MIGRATE** |
+| 22 | `infrastructure/api/routes/health.js` | API health routes: `GET /` and `GET /health` (`SELECT 1` ping, uptime) | `express`, `database.js` | `infrastructure/api/index.js` | **LOW** (Service health) | `internal/health` | P2 | **MIGRATED (Step 5B.3)** |
 | 23 | `infrastructure/auth/auth-middleware.js` | Request auth: bearer token for worker calls, session auth, email verification | `./internal-worker-auth.js`, `logger.js` | Express routes | **CRITICAL** (API Access control) | `internal/auth` | P2 | **SHOULD MIGRATE / REPLACE** |
 | 24 | `infrastructure/auth/auth.js` | 100% duplicate copy of `auth-middleware.js` | `./internal-worker-auth.js` | Legacy imports | **CRITICAL** (Redundant code) | None (Single auth package) | N/A | **DISCARD** |
 | 25 | `infrastructure/auth/internal-worker-auth.js` | Internal worker Bearer token authentication with timing-safe comparison | `node:crypto` | `auth-middleware.js` | **CRITICAL** (Timing attack protection) | `internal/auth` | P1 | **MUST MIGRATE** |
@@ -219,7 +219,7 @@ Based on the dependency analysis, the safest implementation sequence for future 
 
 1. **Step 5B.1 — Configuration Subsystem (`internal/config`)**: **COMPLETED ✅**
 2. **Step 5B.2 — Logging & Secret Scrubbing (`internal/logging`)**: **COMPLETED ✅**
-3. **Step 5B.3 — Health Server & Probes (`internal/health`)**: Port `/healthz` and `/readyz` HTTP server.
+3. **Step 5B.3 — Health Server & Probes (`internal/health`)**: **COMPLETED ✅**
 4. **Step 5B.4 — Lifecycle & Graceful Drain (`internal/lifecycle`)**: Port state machine, signal listeners, and in-flight work tracker.
 5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: Implement PostgreSQL pool and `hash32` advisory locking with `pgx`.
 6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: Port timing-safe worker token verification and session security helpers.
@@ -308,4 +308,55 @@ Based on the dependency analysis, the safest implementation sequence for future 
   - `infrastructure/utils/logger.js` (UNTOUCHED)
   - `packages/log-scrub/index.js` (UNTOUCHED)
   - `packages/log-scrub/secret-material.js` (UNTOUCHED)
+
+---
+
+## 10. Subsystem Migration Status: Step 5B.3 Health Subsystem
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Files Inspected:**
+  1. `kubernetes/controller/health-server.js`: HTTP probe server for Kubernetes controller liveness (`/healthz`) and readiness (`/readyz`) probes.
+  2. `infrastructure/api/routes/health.js`: Application API health routes exposing `GET /` and `GET /health` with PostgreSQL database ping.
+- **Go Destination:** `internal/health/`
+  - `internal/health/types.go`: Core types and interfaces (`ControllerStatus`, `StatusProvider`, `Checker`, `PortChecker`, `State`, `ProbeResponse`, `ControllerLifecycleChecker`).
+  - `internal/health/server.go`: Full controller probe HTTP server and handler (`ControllerHealthHandler`, `WritePublicResponse`, `NewServer`, `Server.Start`, `Server.Listen`, `Server.Shutdown`, `Server.Close`).
+  - `internal/health/api_health.go`: API health handler (`NewAPIHealthHandler`, `DBPinger`, `PingFunc`, `APIHealthConfig`, `APIHealthResponse`).
+- **Exact Liveness Semantics (`GET /healthz`):**
+  - Healthy (200 OK): `{"status":"ok"}`. Evaluated when controller phase is `"running"` and dependent ports (client, reporter) are alive.
+  - Unhealthy (503 Service Unavailable): `{"status":"unavailable"}`. Evaluated if controller is starting, stopped, failed, or dependent ports are not alive.
+- **Exact Readiness Semantics (`GET /readyz`):**
+  - Ready (200 OK): `{"status":"ready"}`. Evaluated when controller is healthy, `acceptingWork` is true, and dependent ports are ready.
+  - Not ready (503 Service Unavailable): `{"status":"not_ready"}`. Evaluated if controller is not healthy, not accepting work, or dependent ports are not ready.
+- **Exact API Health Semantics (`infrastructure/api/routes/health.js`):**
+  - `GET /`: returns 200 OK with plain text `"API running"` (`text/plain; charset=utf-8`).
+  - `GET /health`: executes database connectivity check (`Ping(ctx)`).
+    - On success: 200 OK, `{"status":"healthy","timestamp":"...","uptime":12.34,"environment":"production"}`.
+    - On error: logs `logger.Error("Health check failed", "error", err.Error())` and returns 503 Service Unavailable, `{"status":"unhealthy","timestamp":"...","error":"..."}`.
+- **Routing & Method Semantics:**
+  - Non-GET requests on probe endpoints return 404 Not Found with `{"status":"not_found"}`.
+  - Unknown routes on probe server return 404 Not Found with `{"status":"not_found"}`.
+  - Header `Content-Type: application/json; charset=utf-8` and exact `Content-Length` set on all probe responses.
+- **Lifecycle & Dependency Interfaces:**
+  - Decoupled `StatusProvider` interface (`Status() ControllerStatus`) prevents circular dependencies on `internal/lifecycle`.
+  - `ControllerLifecycleChecker` accurately models the controller lifecycle and port dependencies (`ClientPort`, `ReporterPort`, `AcceptingWork`, `PhaseFn`).
+  - Backward-compatible `State` and `Checker` abstractions preserved for `internal/platform`.
+  - `DBPinger` interface decouples API health checks from specific database drivers.
+- **Tests Added:**
+  - `internal/health/server_test.go`:
+    - `TestControllerHealthHandler_Endpoints`: verifies 200/503 status transitions on `/healthz` and `/readyz`.
+    - `TestControllerHealthHandler_MethodAndPathRejection`: verifies 404 `not_found` on non-GET methods (POST, PUT, DELETE, PATCH, HEAD) and unknown paths.
+    - `TestControllerLifecycleChecker_Integration`: verifies lifecycle phase (`starting`, `running`) and dependent port failures.
+    - `TestServer_LifecycleAndHTTP`: tests real network listener startup, dynamic port binding, real HTTP requests, and graceful shutdown.
+    - `TestServer_PortAlreadyInUse`: tests port collision handling and error propagation.
+    - `TestHealthResponses_NoSecretsOrSensitiveData`: verifies responses contain strictly the `status` field with zero credentials or config leaks.
+  - `internal/health/api_health_test.go`:
+    - `TestAPIHealthHandler_RootRoute`: tests `GET /` returning `"API running"`.
+    - `TestAPIHealthHandler_HealthSuccess`: tests `GET /health` with DB ping, timestamp, uptime, environment.
+    - `TestAPIHealthHandler_HealthFailureAndLogging`: tests 503 error on DB failure and verifies logger error emission.
+    - `TestAPIHealthHandler_MethodAndPathRejection`: tests 404 rejection on unsupported methods and unknown paths.
+    - `TestAPIHealthResponses_ResponseSafety`: asserts that API health responses do not leak sensitive database configuration.
+- **Untouched Source Files:**
+  - `kubernetes/controller/health-server.js` (UNTOUCHED)
+  - `infrastructure/api/routes/health.js` (UNTOUCHED)
+
 
