@@ -16,4 +16,6 @@ resolver = "2"
 members = [
     "core-engine",
     "core-engine-proto",
+    "core-engine-server",
 ]
+

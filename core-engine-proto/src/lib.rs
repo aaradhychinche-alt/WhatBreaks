@@ -61,7 +61,10 @@ mod tests {
         let decoded = ResourceIdentity::decode(&buf[..]).unwrap();
         assert_eq!(decoded.provider, "kubernetes");
         assert_eq!(decoded.resource_type, "pod");
-        assert_eq!(decoded.provider_id, "cluster/prod/namespace/payments/pod/api-abc");
+        assert_eq!(
+            decoded.provider_id,
+            "cluster/prod/namespace/payments/pod/api-abc"
+        );
     }
 
     #[test]
@@ -88,29 +91,34 @@ mod tests {
         let decoded = Evidence::decode(&buf[..]).unwrap();
         assert_eq!(decoded.id, "550e8400-e29b-41d4-a716-446655440000");
         assert_eq!(decoded.observation_type, "RUNTIME_CONNECTION");
-        assert_eq!(decoded.data, br#"{"remote_ip":"10.0.0.1","remote_port":5432}"#);
+        assert_eq!(
+            decoded.data,
+            br#"{"remote_ip":"10.0.0.1","remote_port":5432}"#
+        );
     }
 
     #[test]
     fn test_discovery_result_variants() {
         let discovered_result = DiscoveryResult {
-            outcome: Some(discovery_result::Outcome::Discovered(DiscoveredRelationship {
-                relationship: Some(Relationship {
-                    source: Some(ResourceIdentity {
-                        provider: "kubernetes".to_string(),
-                        resource_type: "pod".to_string(),
-                        provider_id: "default/app".to_string(),
+            outcome: Some(discovery_result::Outcome::Discovered(
+                DiscoveredRelationship {
+                    relationship: Some(Relationship {
+                        source: Some(ResourceIdentity {
+                            provider: "kubernetes".to_string(),
+                            resource_type: "pod".to_string(),
+                            provider_id: "default/app".to_string(),
+                        }),
+                        target: Some(ResourceIdentity {
+                            provider: "aws".to_string(),
+                            resource_type: "rds".to_string(),
+                            provider_id: "arn:aws:rds:us-east-1:123456789012:db:main".to_string(),
+                        }),
+                        kind: "DEPENDS_ON".to_string(),
+                        category: "Dependency".to_string(),
                     }),
-                    target: Some(ResourceIdentity {
-                        provider: "aws".to_string(),
-                        resource_type: "rds".to_string(),
-                        provider_id: "arn:aws:rds:us-east-1:123456789012:db:main".to_string(),
-                    }),
-                    kind: "DEPENDS_ON".to_string(),
-                    category: "Dependency".to_string(),
-                }),
-                supporting_evidence_ids: vec!["ev-1".to_string(), "ev-2".to_string()],
-            })),
+                    supporting_evidence_ids: vec!["ev-1".to_string(), "ev-2".to_string()],
+                },
+            )),
         };
 
         let mut buf = Vec::new();
@@ -171,4 +179,3 @@ mod tests {
         assert_eq!(decoded_res.results.len(), 1);
     }
 }
-

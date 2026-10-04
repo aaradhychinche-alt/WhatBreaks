@@ -25,22 +25,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto_include = workspace_root.join("proto");
 
     tonic_build::configure()
-        // Server stubs (trait definitions only — no implementation).
-        // The actual gRPC server is future work in a separate crate.
+        // Server stubs (trait definitions only).
         .build_server(true)
-        // Client stubs are disabled for now.
-        // The generated client uses tonic::transport::Channel which requires
-        // the "channel" feature — a heavier tokio/transport dependency that
-        // is not needed until the Rust gRPC server crate is implemented.
-        // Re-enable when the server crate is added.
-        .build_client(false)
+        // Client stubs (client wrapper for tonic::transport::Channel).
+        .build_client(true)
         .compile_protos(&[&proto_file], &[&proto_include])?;
 
     // Tell Cargo to re-run this build script only when the proto file changes.
-    println!(
-        "cargo:rerun-if-changed={}",
-        proto_file.display()
-    );
+    println!("cargo:rerun-if-changed={}", proto_file.display());
 
     Ok(())
 }

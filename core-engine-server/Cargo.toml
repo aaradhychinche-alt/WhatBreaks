@@ -1,0 +1,20 @@
+[package]
+name = "wb-core-server"
+version = "0.1.0"
+edition = "2021"
+description = "WhatBreaks Core Engine – gRPC server bridging transport and domain"
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+wb-core-engine = { path = "../core-engine" }
+wb-core-proto = { path = "../core-engine-proto" }
+tonic = { version = "0.12", features = ["transport"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+chrono = { version = "0.4", features = ["serde"] }
+serde_json = "1.0"
+uuid = { version = "1.10", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+

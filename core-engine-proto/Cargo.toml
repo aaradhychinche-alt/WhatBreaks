@@ -13,8 +13,9 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 # prost: protobuf runtime for Rust
 prost = "0.13"
-# tonic: gRPC runtime (types + client/server traits; server impl is future work)
-tonic = { version = "0.12", default-features = false, features = ["codegen", "prost"] }
+# tonic: gRPC runtime (types + client/server traits)
+tonic = { version = "0.12", default-features = false, features = ["codegen", "prost", "channel"] }
+
 
 [build-dependencies]
 # tonic-build: compile .proto → Rust at build time (no separate protoc plugin needed)
