@@ -12,10 +12,12 @@
 //! - [`discovery`]: Deterministic, evidence-backed relationship discovery engine.
 //! - [`graph`]: In-memory directional graph layer for resource relationships.
 //! - [`traversal`]: Deterministic, in-memory graph traversal layer.
+//! - [`impact`]: Deterministic, in-memory candidate blast radius / impact analysis engine.
 
 pub mod discovery;
 pub mod evidence;
 pub mod graph;
+pub mod impact;
 pub mod relationship;
 pub mod resource;
 pub mod traversal;
@@ -25,6 +27,7 @@ pub use discovery::{
 };
 pub use evidence::{CollectorId, Evidence, EvidenceId, EvidenceSource, ObservationType};
 pub use graph::Graph;
+pub use impact::{propagates_impact, ImpactEngine, ImpactRequest, ImpactResult, ImpactedResource};
 pub use relationship::{Relationship, RelationshipCategory, RelationshipKind};
 pub use resource::{
     Attributes, Provider, Resource, ResourceId, ResourceIdentity, ResourceKind, ResourceMetadata,

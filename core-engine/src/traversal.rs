@@ -41,6 +41,7 @@
 use std::collections::HashSet;
 
 use crate::graph::Graph;
+use crate::relationship::Relationship;
 use crate::resource::ResourceIdentity;
 
 // ---------------------------------------------------------------------------
@@ -201,6 +202,25 @@ impl Traversal {
         direction: TraversalDirection,
         max_depth: usize,
     ) -> TraversalResult {
+        Self::traverse_filtered(graph, start, direction, max_depth, |_| true)
+    }
+
+    /// Traverse the graph starting from `start` in the specified `direction`,
+    /// up to a maximum relationship hop distance of `max_depth`, filtering edges
+    /// with `predicate`.
+    ///
+    /// Relationships for which `predicate(&relationship)` returns `false` are not
+    /// traversed, acting as traversal boundaries.
+    pub fn traverse_filtered<F>(
+        graph: &Graph,
+        start: &ResourceIdentity,
+        direction: TraversalDirection,
+        max_depth: usize,
+        mut predicate: F,
+    ) -> TraversalResult
+    where
+        F: FnMut(&Relationship) -> bool,
+    {
         if !graph.contains_resource(start) {
             return TraversalResult::new(Vec::new());
         }
@@ -217,12 +237,21 @@ impl Traversal {
             let mut next_level: Vec<ResourceIdentity> = Vec::new();
 
             for node in &current_level {
-                let neighbors = match direction {
-                    TraversalDirection::Outgoing => graph.neighbors_from(node),
-                    TraversalDirection::Incoming => graph.neighbors_to(node),
+                let relationships = match direction {
+                    TraversalDirection::Outgoing => graph.get_relationships_from(node),
+                    TraversalDirection::Incoming => graph.get_relationships_to(node),
                 };
 
-                for neighbor in neighbors {
+                for rel in relationships {
+                    if !predicate(&rel) {
+                        continue;
+                    }
+
+                    let neighbor = match direction {
+                        TraversalDirection::Outgoing => rel.target,
+                        TraversalDirection::Incoming => rel.source,
+                    };
+
                     if !visited.contains(&neighbor) {
                         visited.insert(neighbor.clone());
                         next_level.push(neighbor);
@@ -795,5 +824,31 @@ mod tests {
         assert_eq!(count, 2);
         let into_count = res.into_iter().count();
         assert_eq!(into_count, 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // 28. Filtered traversal
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_traversal_filtered() {
+        let mut g = Graph::new();
+        g.add_relationship(make_rel("a", "b", RelationshipKind::CALLS));
+        g.add_relationship(make_rel("b", "c", RelationshipKind::OWNS));
+        g.add_relationship(make_rel("b", "d", RelationshipKind::CALLS));
+
+        // Filter out OWNS relationships
+        let res = Traversal::traverse_filtered(
+            &g,
+            &make_identity("a"),
+            TraversalDirection::Outgoing,
+            5,
+            |rel| rel.kind != RelationshipKind::OWNS,
+        );
+
+        assert_eq!(res.len(), 3);
+        assert!(res.contains(&make_identity("a")));
+        assert!(res.contains(&make_identity("b")));
+        assert!(res.contains(&make_identity("d")));
+        assert!(!res.contains(&make_identity("c")));
     }
 }
