@@ -36,7 +36,7 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 10 | `packages/config/src/database.js` | PostgreSQL connection config parsing, SSL mode flags, and connection pool parameters | None | `packages/config/src/index.js`, `workers/runtime/db.js` | **HIGH** (DB credentials & TLS) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 11 | `packages/config/src/network.js` | Network allowlist validation, private IP and loopback blocking against SSRF | None | `kubernetes/controller/config.js` | **HIGH** (SSRF prevention) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 12 | `packages/config/src/index.js` | Aggregates DB/Network config, but also includes SMTP email and TokenTimer cert expiration alerts | `./database.js`, `./network.js` | Platform consumers | **HIGH** (Credentials) | `internal/config` (core only) | P1 | **MIGRATED (Step 5B.1)** |
-| 13 | `workers/runtime/db.js` | PostgreSQL connection pool, query wrapper, and advisory locking (`hash32` + `pg_try_advisory_lock`) | `pg`, `@tokentimer/config` | `workers/runtime/runner.js` | **HIGH** (Advisory locks & DB access) | `internal/database` | P1 | **MUST MIGRATE** |
+| 13 | `workers/runtime/db.js` | PostgreSQL connection pool, query wrapper, and advisory locking (`hash32` + `pg_try_advisory_lock`) | `pg`, `@tokentimer/config` | `workers/runtime/runner.js` | **HIGH** (Advisory locks & DB access) | `internal/database` | P1 | **MIGRATED (Step 5B.5)** |
 | 14 | `workers/runtime/is-node-entrypoint.js` | Checks `process.argv[1]` vs `import.meta.url` for CLI execution | `node:process`, `node:url` | `workers/runtime/runner.js` | **NONE** (Runtime glue) | None | N/A | **DISCARD** |
 | 15 | `workers/runtime/logger.js` | Worker runtime JSON logging with log scrubbing | `@tokentimer/log-scrub` | Worker modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 16 | `workers/runtime/metrics.js` | Prometheus metrics for TokenTimer certificate alert queues and digests | `prom-client` | Worker runtime | **LOW** (Telemetry) | `internal/metrics` (future) | P3 | **REPLACE / REDESIGN** |
@@ -53,7 +53,7 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 27 | `infrastructure/auth/validation.js` | Express-validator schemas for TokenTimer SSL/TLS certs, licenses, and renewal fields | `express-validator` | Legacy TokenTimer routes | **MEDIUM** (Input validation) | None (Not WhatBreaks domain) | N/A | **DISCARD** |
 | 28 | `infrastructure/auth/workspace-access-policy.js` | `hideWorkspaceExistence` policy returning 404 instead of 403 on denied workspaces | None | Route handlers | **MEDIUM** (Workspace enumeration prevention) | `internal/auth` | P2 | **SHOULD MIGRATE / REPLACE** |
 | 29 | `infrastructure/config/runtime-labels.js` | Reads `.tokentimer-variant`, `TT_MODE`, `TT_VARIANT` for SaaS/OSS labeling | `node:fs`, `node:path` | `logger.js` | **NONE** (Branding) | None | N/A | **DISCARD** |
-| 30 | `infrastructure/database/database.js` | PostgreSQL pool creation, TLS configuration (`TLSv1.3`), `waitForDatabase`, query instrumentation | `pg`, `prom-client`, `logger.js` | Infrastructure repos | **HIGH** (Postgres connectivity & TLS) | `internal/database` | P1 | **MUST MIGRATE** |
+| 30 | `infrastructure/database/database.js` | PostgreSQL pool creation, TLS configuration (`TLSv1.3`), `waitForDatabase`, query instrumentation | `pg`, `prom-client`, `logger.js` | Infrastructure repos | **HIGH** (Postgres connectivity & TLS) | `internal/database` | P1 | **MIGRATED (Step 5B.5)** |
 | 31 | `infrastructure/utils/logger.js` | Winston logger with sensitive key redaction, value scrubbing, JSON ordering | `winston`, `prom-client`, `log-scrub` | Infrastructure modules | **HIGH** (Zero Secret Custody in logs) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 
 ---
@@ -221,7 +221,7 @@ Based on the dependency analysis, the safest implementation sequence for future 
 2. **Step 5B.2 — Logging & Secret Scrubbing (`internal/logging`)**: **COMPLETED ✅**
 3. **Step 5B.3 — Health Server & Probes (`internal/health`)**: **COMPLETED ✅**
 4. **Step 5B.4 — Lifecycle & Graceful Drain (`internal/lifecycle`)**: **COMPLETED ✅**
-5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: Implement PostgreSQL pool and `hash32` advisory locking with `pgx`.
+5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: **COMPLETED ✅**
 6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: Port timing-safe worker token verification and session security helpers.
 7. **Step 5B.7 — Scheduler & Task Runner (`internal/scheduler`)**: Implement cron/interval job scheduler and overlap prevention.
 8. **Step 5B.8 — API Layer & Middleware (`internal/api`)**: Implement HTTP API, security headers, rate limiting, and route handlers.
@@ -458,6 +458,75 @@ Based on the dependency analysis, the safest implementation sequence for future 
 - **Untouched Source Files:**
   - `kubernetes/controller/lifecycle.js` (UNTOUCHED)
   - `kubernetes/controller/runtime.js` (UNTOUCHED)
+
+---
+
+## 12. Subsystem Migration Status: Step 5B.5 Database Runtime Subsystem
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Files Inspected:**
+  1. `infrastructure/database/database.js`: PostgreSQL connection pool creation, pool options, TLS configuration (`TLSv1.3`), `waitForDatabase`, `testConnection`, query error classification (`isConnectionError`), connection error handling.
+  2. `workers/runtime/db.js`: Worker connection pool, `withClient` connection wrapper, advisory lock helpers (`tryAdvisoryLock`, `advisoryUnlock`), `hash32` algorithm.
+  3. `packages/config/src/database.js`: Reference configuration parameters and connection string generation migrated in Step 5B.1.
+- **Go Destination:** `internal/database/`
+  - `internal/database/types.go`: Core interfaces and structs (`DB`, `Connection`, `Tx`, `SessionLock`, `PoolStat`, `AdvisoryLocker`, `Client`).
+  - `internal/database/errors.go`: Typed errors (`ErrLockAcquisitionFailed`, `ErrDatabaseNotReady`, `ErrDatabaseClosed`, `ErrTransactionRolledBack`), `IsConnectionError`, and `RedactError`.
+  - `internal/database/lock.go`: Legacy JavaScript-compatible UTF-16 `Hash32`, 64-bit non-negative `AdvisoryLockKey`, `TryAdvisoryLock`, and `AdvisoryUnlock`.
+  - `internal/database/config.go`: Mapping `config.DatabaseConfig` to `pgxpool.Config`, TLS configuration, and connection usage recycling hook (`maxUses: 7500`).
+  - `internal/database/database.go`: `Database` runtime implementation wrapping `pgxpool.Pool`, with `WithConnection`, `WithTransaction`, `AcquireLock`, `TestConnection`, `WaitForDatabase`, `Ping`, `Close`, and `Stat`.
+- **Exact Pool Defaults:**
+  - `PoolMax`: 10 (default in `infrastructure/database/database.js` and `workers/runtime/db.js`)
+  - `PoolMin`: 2 (default in `infrastructure/database/database.js` and `packages/config/src/database.js`)
+  - `PoolIdleTimeout`: 30,000 ms (30 seconds across all JS sources)
+  - `ConnectionTimeout`: 5,000 ms (config default) / 30,000 ms (infrastructure default)
+  - `AcquireTimeout`: 60,000 ms (60 seconds)
+  - `MaxUses`: 7,500 connections (enforced via `AfterRelease` hook destroying connection after 7500 queries)
+- **Driver Selected:**
+  - `github.com/jackc/pgx/v5` and `github.com/jackc/pgx/v5/pgxpool`.
+  - Native Go PostgreSQL driver with high-performance binary protocol support, connection pool hooks (`BeforeAcquire`, `AfterRelease`, `BeforeClose`), connection lifetime controls, native advisory locking, and direct SSL/TLS integration.
+- **SSL/TLS Semantics:**
+  - `verify` (or CA root certificate provided): encrypted, server identity verified (`RejectUnauthorized: true`), `RootCAs` cert pool populated, `MinVersion: TLSv1.3`.
+  - `require`: encrypted, server identity verified in production (`RejectUnauthorized: isProduction`), `MinVersion: TLSv1.3`.
+  - `require-no-verify`: encrypted, server identity NOT verified (`RejectUnauthorized: false`), `MinVersion: TLSv1.3`.
+  - `disable`: unencrypted plaintext connection.
+- **Advisory Lock Hashing Compatibility:**
+  - `Hash32(s string) int32`: decodes UTF-8 string into UTF-16 code units (`utf16.Encode([]rune(s))`) to exactly reproduce JavaScript's UTF-16 `s.charCodeAt(i)` and `(h << 5) - h + code; h |= 0`.
+  - Tested and verified byte-for-byte against Node.js output:
+    - Empty string: `0`
+    - `"test-lock"`: `-1226527354`
+    - `"whatbreaks:discovery"`: `-2033551410`
+    - `"café"`: `3045921`
+    - `"日本語"`: `25921943`
+    - `"worker:🚀"` (Astral emoji with UTF-16 surrogate pair): `1097726815`
+    - Long string: `-2047572317`
+  - `AdvisoryLockKey(key string) int64`: computes `Math.abs(hash32(key))` as a 64-bit integer, ensuring that when `hash32` produces `math.MinInt32` (`-2147483648`), the value is cleanly negated to positive `2147483648` without signed 32-bit overflow, matching JavaScript `Number` behavior when passed to PostgreSQL `pg_try_advisory_lock($1)`.
+- **Connection Affinity:**
+  - PostgreSQL advisory locks are session-scoped. Connection affinity is strictly preserved:
+    1. `WithConnection`: acquires dedicated `*pgxpool.Conn`, passes `Connection` to callback, releases connection in `defer`.
+    2. `AcquireLock`: acquires dedicated `*pgxpool.Conn`, runs `pg_try_advisory_lock($1)`. If lock fails, connection is released immediately. If acquired, returns `SessionLock` holding that exact connection until `Unlock(ctx)` is called, which calls `pg_advisory_unlock($1)` on that connection and releases it to the pool.
+- **Connection Error Classification:**
+  - `IsConnectionError(err error) bool`: detects SQLSTATE Class `08*` (`pgconn.PgError`), `net.OpError`, `syscall.ECONNREFUSED`, `syscall.ECONNRESET`, and error messages containing `"connection terminated"`, `"could not connect"`, `"connection reset"`, `"broken pipe"`.
+- **Secret Redaction:**
+  - `RedactError(err error)`: scrubs any DSN passwords (`postgresql://user:[REDACTED]@host...`) before error messages can be logged or returned.
+  - Safe DSN generation in `internal/config/database.go` replaces passwords with `[REDACTED]`.
+- **Health Integration:**
+  - `*Database` implements `Ping(ctx context.Context) error`, satisfying `internal/health.DBPinger` without cyclic package dependencies.
+- **Tests Added:**
+  - `internal/database/database_test.go`:
+    - `TestHash32_ExactJavaScriptCompatibility`: validates exact matching across ASCII, UTF-8, multi-byte Unicode, and emojis.
+    - `TestAdvisoryLockKey_MinInt32Boundary`: validates Math.abs boundary behavior.
+    - `TestIsConnectionError`: validates SQLSTATE Class 08, network errors, syscalls, and message parsing.
+    - `TestRedactError`: validates credential scrubbing.
+    - `TestBuildPgxPoolConfig`: validates connection pool bounds, TLS settings, and MaxUses hook.
+    - `TestDatabase_ClosedPoolGuards`: validates closed pool guard on all DB methods and idempotent Close.
+    - `TestDatabase_ConcurrentHashingAndLockKeys`: validates concurrent hashing across 50 goroutines.
+    - `TestSessionLock_IdempotentUnlock`: validates idempotency of SessionLock unlock.
+  - `internal/database/integration_test.go`:
+    - `TestIntegration_RealPostgreSQL`: comprehensive integration test covering ping, query, transaction commit, transaction rollback, and advisory lock connection affinity & contention against live PostgreSQL (conditionally skipped when PostgreSQL is unreachable).
+- **Untouched Source Files:**
+  - `infrastructure/database/database.js` (UNTOUCHED)
+  - `workers/runtime/db.js` (UNTOUCHED)
+
 
 
 
