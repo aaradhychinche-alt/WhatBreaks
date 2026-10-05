@@ -46,12 +46,12 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 20 | `infrastructure/api/middleware/csrf.js` | Double-submit cookie CSRF protection | `csrf-csrf`, `session-cookie-options.js` | `infrastructure/api/index.js` | **HIGH** (Web CSRF defense) | `internal/api/middleware` | P2 | **SHOULD MIGRATE / REPLACE** |
 | 21 | `infrastructure/api/middleware/rateLimit.js` | Global, slowdown, and authenticated user/IP rate limiters | `express-rate-limit`, `express-slow-down` | `infrastructure/api/index.js` | **HIGH** (Abuse prevention) | `internal/api/middleware` | P2 | **SHOULD MIGRATE / REPLACE** |
 | 22 | `infrastructure/api/routes/health.js` | API health routes: `GET /` and `GET /health` (`SELECT 1` ping, uptime) | `express`, `database.js` | `infrastructure/api/index.js` | **LOW** (Service health) | `internal/health` | P2 | **MIGRATED (Step 5B.3)** |
-| 23 | `infrastructure/auth/auth-middleware.js` | Request auth: bearer token for worker calls, session auth, email verification | `./internal-worker-auth.js`, `logger.js` | Express routes | **CRITICAL** (API Access control) | `internal/auth` | P2 | **SHOULD MIGRATE / REPLACE** |
+| 23 | `infrastructure/auth/auth-middleware.js` | Request auth: bearer token for worker calls, session auth, email verification | `./internal-worker-auth.js`, `logger.js` | Express routes | **CRITICAL** (API Access control) | `internal/auth` | P2 | **MIGRATED (Step 5B.6)** |
 | 24 | `infrastructure/auth/auth.js` | 100% duplicate copy of `auth-middleware.js` | `./internal-worker-auth.js` | Legacy imports | **CRITICAL** (Redundant code) | None (Single auth package) | N/A | **DISCARD** |
-| 25 | `infrastructure/auth/internal-worker-auth.js` | Internal worker Bearer token authentication with timing-safe comparison | `node:crypto` | `auth-middleware.js` | **CRITICAL** (Timing attack protection) | `internal/auth` | P1 | **MUST MIGRATE** |
-| 26 | `infrastructure/auth/session-cookie-options.js` | Cookie security flags (HttpOnly, SameSite, Secure, `__Host-` prefix) & CORS origin generator | None | `infrastructure/api/middleware/csrf.js` | **HIGH** (Session security) | `internal/auth` / `internal/api` | P2 | **SHOULD MIGRATE / REPLACE** |
+| 25 | `infrastructure/auth/internal-worker-auth.js` | Internal worker Bearer token authentication with timing-safe comparison | `node:crypto` | `auth-middleware.js` | **CRITICAL** (Timing attack protection) | `internal/auth` | P1 | **MIGRATED (Step 5B.6)** |
+| 26 | `infrastructure/auth/session-cookie-options.js` | Cookie security flags (HttpOnly, SameSite, Secure, `__Host-` prefix) & CORS origin generator | None | `infrastructure/api/middleware/csrf.js` | **HIGH** (Session security) | `internal/auth` / `internal/api` | P2 | **MIGRATED (Step 5B.6)** |
 | 27 | `infrastructure/auth/validation.js` | Express-validator schemas for TokenTimer SSL/TLS certs, licenses, and renewal fields | `express-validator` | Legacy TokenTimer routes | **MEDIUM** (Input validation) | None (Not WhatBreaks domain) | N/A | **DISCARD** |
-| 28 | `infrastructure/auth/workspace-access-policy.js` | `hideWorkspaceExistence` policy returning 404 instead of 403 on denied workspaces | None | Route handlers | **MEDIUM** (Workspace enumeration prevention) | `internal/auth` | P2 | **SHOULD MIGRATE / REPLACE** |
+| 28 | `infrastructure/auth/workspace-access-policy.js` | `hideWorkspaceExistence` policy returning 404 instead of 403 on denied workspaces | None | Route handlers | **MEDIUM** (Workspace enumeration prevention) | `internal/auth` | P2 | **MIGRATED (Step 5B.6)** |
 | 29 | `infrastructure/config/runtime-labels.js` | Reads `.tokentimer-variant`, `TT_MODE`, `TT_VARIANT` for SaaS/OSS labeling | `node:fs`, `node:path` | `logger.js` | **NONE** (Branding) | None | N/A | **DISCARD** |
 | 30 | `infrastructure/database/database.js` | PostgreSQL pool creation, TLS configuration (`TLSv1.3`), `waitForDatabase`, query instrumentation | `pg`, `prom-client`, `logger.js` | Infrastructure repos | **HIGH** (Postgres connectivity & TLS) | `internal/database` | P1 | **MIGRATED (Step 5B.5)** |
 | 31 | `infrastructure/utils/logger.js` | Winston logger with sensitive key redaction, value scrubbing, JSON ordering | `winston`, `prom-client`, `log-scrub` | Infrastructure modules | **HIGH** (Zero Secret Custody in logs) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
@@ -222,7 +222,7 @@ Based on the dependency analysis, the safest implementation sequence for future 
 3. **Step 5B.3 — Health Server & Probes (`internal/health`)**: **COMPLETED ✅**
 4. **Step 5B.4 — Lifecycle & Graceful Drain (`internal/lifecycle`)**: **COMPLETED ✅**
 5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: **COMPLETED ✅**
-6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: Port timing-safe worker token verification and session security helpers.
+6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: **COMPLETED ✅**
 7. **Step 5B.7 — Scheduler & Task Runner (`internal/scheduler`)**: Implement cron/interval job scheduler and overlap prevention.
 8. **Step 5B.8 — API Layer & Middleware (`internal/api`)**: Implement HTTP API, security headers, rate limiting, and route handlers.
 9. **Step 5B.9 — Kubernetes Collector (`internal/collector/k8s`)**: Build new Go-native Kubernetes collector using `client-go` and feed evidence into `internal/coreclient`.
@@ -526,6 +526,56 @@ Based on the dependency analysis, the safest implementation sequence for future 
 - **Untouched Source Files:**
   - `infrastructure/database/database.js` (UNTOUCHED)
   - `workers/runtime/db.js` (UNTOUCHED)
+
+---
+
+## 13. Subsystem Migration Status: Step 5B.6 Auth + Security Subsystem
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Files Inspected & Migrated:**
+  1. `infrastructure/auth/auth-middleware.js`: Comprehensive authentication middleware validating internal worker bearer tokens, session state, and email verification.
+  2. `infrastructure/auth/internal-worker-auth.js`: Internal worker bearer token authentication with constant-time comparison (`safeEqual`).
+  3. `infrastructure/auth/session-cookie-options.js`: Session and CSRF cookie security flags (HttpOnly, SameSite, Secure, `__Host-` prefix) and CORS origin generator.
+  4. `infrastructure/auth/workspace-access-policy.js`: Route-level workspace access semantics (`hideWorkspaceExistence` policy returning 404 instead of 403).
+- **Approved Obsolete Files (Untouched & Retained):**
+  1. `infrastructure/auth/auth.js`: 100% duplicate copy of `auth-middleware.js` (DISCARD).
+  2. `infrastructure/auth/validation.js`: Express-validator schemas for legacy TokenTimer SSL/TLS certificate renewal forms (DISCARD).
+- **Go Destination:** `internal/auth/`
+  - `internal/auth/identity.go`: Authenticated user representation (`User`), role constants (`RoleAdmin`, `RoleOwner`, `RoleMember`, `WorkerRole`, `WorkerEmail`), context attachment/extraction helpers, client IP resolver.
+  - `internal/auth/worker.go`: Constant-time bearer token authenticator (`ConstantTimeCompare`, `ExtractBearerToken`, `TokenWorkerAuthenticator`, `NewWorkerAuthenticatorFromEnv`).
+  - `internal/auth/cookie.go`: Session cookie options (`ResolveSessionCookieOptions`, `ResolveClearSessionCookieOptions`), `ResolveCsrfCookieName`, `BuildCorsOrigins`, origin classifiers (`IsLocalHTTPOrigin`, `IsHTTPSOrigin`, `ShouldUseCrossOriginCookies`).
+  - `internal/auth/workspace.go`: Workspace access authorizer (`WorkspaceAuthorizer`, `WorkspaceMembershipProvider`, `MemoryMembershipProvider`), `HideWorkspaceExistence` middleware, UUID validator, deny-by-default rules.
+  - `internal/auth/middleware.go`: HTTP middleware (`RequireAuth`, `EnforceEmailVerification`), `SessionValidator` interface, structured logging, JSON error responses (401, 403, 404).
+  - `internal/auth/auth.go`: Backward-compatible aliases for Step 5A scaffolding (`TokenValidator`, `SimpleWorkerAuthenticator`).
+- **Exact Security Semantics Preserved:**
+  - **Constant-Time Comparison**: `ConstantTimeCompare` performs length checking and byte-level `crypto/subtle.ConstantTimeCompare`, preventing timing side-channel attacks on bearer tokens.
+  - **Bearer Token Extraction**: Requires strictly `"Bearer "` prefix; missing or malformed headers fail closed without panics.
+  - **Secret Non-Leakage**: Tokens and secrets are never serialized into logs, error responses, or diagnostic messages.
+  - **Worker Authorization Bypass**: Internal worker calls authenticated via bearer token bypass email verification and workspace membership checks while attaching synthetic worker identity (`role: "admin"`, `email: "worker@internal"`, `auth_method: "internal"`).
+  - **Workspace Boundary Isolation**: Deny-by-default. Users belonging to Workspace A attempting to access Workspace B are rejected.
+  - **Workspace Enumeration Defense (`HideWorkspaceExistence`)**: When enabled, unauthorized, malformed, or forbidden workspace requests return 404 Not Found instead of 403 Forbidden, concealing workspace existence from unprivileged callers.
+  - **Session Cookie Hardening**:
+    - `HttpOnly: true` prevents XSS cookie theft.
+    - `SameSite: Lax` by default (or `None` on split HTTPS deployments).
+    - `Secure: true` in production (unless explicit local HTTP override is set).
+    - `MaxAge: 2h` (7,200 seconds).
+    - `__Host-psifi.x-csrf-token` prefix used in production when cookies are secure and domain is unbound.
+  - **Email Verification Enforcement**: Local authentication users must have `EmailVerified: true` before accessing protected routes in production. An explicit test-mode bypass (`isTestMode: true` / `NODE_ENV === "test"`) is preserved.
+- **Tests Added:**
+  - `internal/auth/auth_test.go`: Constant-time comparison, backward-compatible worker authenticator.
+  - `internal/auth/worker_test.go`: Valid token, wrong token, prefix match rejection, empty token, bearer extraction, synthetic user attachment, env key fallback.
+  - `internal/auth/cookie_test.go`: Production vs development flags, domain formatting, localhost override, split HTTPS cross-origin cookies, CSRF cookie naming, CORS origin list.
+  - `internal/auth/workspace_test.go`: Valid membership, unauthenticated rejection, malformed UUID rejection, cross-workspace isolation, HideExistence 404 policy, worker bypass, HTTP middleware integration.
+  - `internal/auth/middleware_test.go`: Worker call authentication flow, session validation, missing session, invalid session, email verification enforcement in production vs test mode, exempt routes.
+  - `internal/auth/security_test.go`: Secret containment verification (no tokens in logs or error bodies), nil membership provider deny-by-default, 50-goroutine concurrent authentication and workspace authorization isolation.
+- **Untouched Source Files:**
+  - `infrastructure/auth/auth-middleware.js` (UNTOUCHED)
+  - `infrastructure/auth/internal-worker-auth.js` (UNTOUCHED)
+  - `infrastructure/auth/session-cookie-options.js` (UNTOUCHED)
+  - `infrastructure/auth/workspace-access-policy.js` (UNTOUCHED)
+  - `infrastructure/auth/auth.js` (UNTOUCHED)
+  - `infrastructure/auth/validation.js` (UNTOUCHED)
+
 
 
 
