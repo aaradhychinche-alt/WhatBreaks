@@ -13,6 +13,7 @@
 
 pub mod discovery;
 pub mod evidence;
+pub mod graph;
 pub mod relationship;
 pub mod resource;
 
@@ -20,6 +21,7 @@ pub use discovery::{
     DiscoveredRelationship, DiscoveryEngine, DiscoveryResult, DiscoveryRule, RuntimeConnectionRule,
 };
 pub use evidence::{CollectorId, Evidence, EvidenceId, EvidenceSource, ObservationType};
+pub use graph::Graph;
 pub use relationship::{Relationship, RelationshipCategory, RelationshipKind};
 pub use resource::{
     Attributes, Provider, Resource, ResourceId, ResourceIdentity, ResourceKind, ResourceMetadata,
