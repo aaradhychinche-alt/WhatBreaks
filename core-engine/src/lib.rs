@@ -10,12 +10,15 @@
 //! - [`relationship`]: Directional relationship model between resource identities.
 //! - [`evidence`]: Point-in-time observation model (factual foundation for discovery).
 //! - [`discovery`]: Deterministic, evidence-backed relationship discovery engine.
+//! - [`graph`]: In-memory directional graph layer for resource relationships.
+//! - [`traversal`]: Deterministic, in-memory graph traversal layer.
 
 pub mod discovery;
 pub mod evidence;
 pub mod graph;
 pub mod relationship;
 pub mod resource;
+pub mod traversal;
 
 pub use discovery::{
     DiscoveredRelationship, DiscoveryEngine, DiscoveryResult, DiscoveryRule, RuntimeConnectionRule,
@@ -26,3 +29,4 @@ pub use relationship::{Relationship, RelationshipCategory, RelationshipKind};
 pub use resource::{
     Attributes, Provider, Resource, ResourceId, ResourceIdentity, ResourceKind, ResourceMetadata,
 };
+pub use traversal::{Traversal, TraversalDirection, TraversalNode, TraversalResult};
