@@ -39,9 +39,9 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 13 | `workers/runtime/db.js` | PostgreSQL connection pool, query wrapper, and advisory locking (`hash32` + `pg_try_advisory_lock`) | `pg`, `@tokentimer/config` | `workers/runtime/runner.js` | **HIGH** (Advisory locks & DB access) | `internal/database` | P1 | **MIGRATED (Step 5B.5)** |
 | 14 | `workers/runtime/is-node-entrypoint.js` | Checks `process.argv[1]` vs `import.meta.url` for CLI execution | `node:process`, `node:url` | `workers/runtime/runner.js` | **NONE** (Runtime glue) | None | N/A | **DISCARD** |
 | 15 | `workers/runtime/logger.js` | Worker runtime JSON logging with log scrubbing | `@tokentimer/log-scrub` | Worker modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
-| 16 | `workers/runtime/metrics.js` | Prometheus metrics for TokenTimer certificate alert queues and digests | `prom-client` | Worker runtime | **LOW** (Telemetry) | `internal/metrics` (future) | P3 | **REPLACE / REDESIGN** |
+| 16 | `workers/runtime/metrics.js` | Prometheus metrics for TokenTimer certificate alert queues and digests | `prom-client` | Worker runtime | **LOW** (Telemetry) | `internal/metrics` (future) | P3 | **CLASSIFIED / REDESIGN** |
 | 17 | `workers/runtime/proxy-compat-check.js` | Warns if Node.js runtime does not support `NODE_USE_ENV_PROXY=1` | `@tokentimer/node-compat` | `workers/runtime/runner.js` | **NONE** (Runtime glue) | None (Go stdlib handles proxies) | N/A | **DISCARD** |
-| 18 | `workers/runtime/runner.js` | 5-field cron parser, lookahead calendar calculation, interval timer, overlap prevention, `--once` mode | `./db.js`, `./logger.js`, `./is-node-entrypoint.js` | Worker runners | **MEDIUM** (Task concurrency & execution) | `internal/scheduler` | P2 | **SHOULD MIGRATE / REPLACE** |
+| 18 | `workers/runtime/runner.js` | 5-field cron parser, lookahead calendar calculation, interval timer, overlap prevention, `--once` mode | `./db.js`, `./logger.js`, `./is-node-entrypoint.js` | Worker runners | **MEDIUM** (Task concurrency & execution) | `internal/scheduler` | P2 | **MIGRATED (Step 5B.7)** |
 | 19 | `infrastructure/api/index.js` | Express HTTP server setup (Helmet security headers, CORS, body size limits, error handling) | `express`, `cors`, `helmet`, `./routes/health.js` | API entrypoint | **HIGH** (API boundary security) | `internal/api` | P2 | **REPLACE / REDESIGN** |
 | 20 | `infrastructure/api/middleware/csrf.js` | Double-submit cookie CSRF protection | `csrf-csrf`, `session-cookie-options.js` | `infrastructure/api/index.js` | **HIGH** (Web CSRF defense) | `internal/api/middleware` | P2 | **SHOULD MIGRATE / REPLACE** |
 | 21 | `infrastructure/api/middleware/rateLimit.js` | Global, slowdown, and authenticated user/IP rate limiters | `express-rate-limit`, `express-slow-down` | `infrastructure/api/index.js` | **HIGH** (Abuse prevention) | `internal/api/middleware` | P2 | **SHOULD MIGRATE / REPLACE** |
@@ -223,7 +223,7 @@ Based on the dependency analysis, the safest implementation sequence for future 
 4. **Step 5B.4 — Lifecycle & Graceful Drain (`internal/lifecycle`)**: **COMPLETED ✅**
 5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: **COMPLETED ✅**
 6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: **COMPLETED ✅**
-7. **Step 5B.7 — Scheduler & Task Runner (`internal/scheduler`)**: Implement cron/interval job scheduler and overlap prevention.
+7. **Step 5B.7 — Scheduler & Task Runner (`internal/scheduler`)**: **COMPLETED ✅**
 8. **Step 5B.8 — API Layer & Middleware (`internal/api`)**: Implement HTTP API, security headers, rate limiting, and route handlers.
 9. **Step 5B.9 — Kubernetes Collector (`internal/collector/k8s`)**: Build new Go-native Kubernetes collector using `client-go` and feed evidence into `internal/coreclient`.
 
@@ -575,6 +575,95 @@ Based on the dependency analysis, the safest implementation sequence for future 
   - `infrastructure/auth/workspace-access-policy.js` (UNTOUCHED)
   - `infrastructure/auth/auth.js` (UNTOUCHED)
   - `infrastructure/auth/validation.js` (UNTOUCHED)
+
+---
+
+## 14. Subsystem Migration Status: Step 5B.7 Scheduler & Workers Subsystem
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Files Inspected & Analyzed:**
+  1. `workers/runtime/runner.js`: Complete worker execution runtime, 5-field cron parser, calendar lookahead engine, interval timer scheduling, overlap locking, CLI arguments/env parsing, database pool lifecycle, and graceful shutdown (30s timeout, SIGINT/SIGTERM handlers).
+  2. `workers/runtime/metrics.js`: Prometheus metrics registry and Pushgateway reporting for alert queues, weekly digests, provider auto-sync, and worker liveness.
+- **Go Destination:** `internal/scheduler/`
+  - `internal/scheduler/cron.go`: 5-field cron parser (`minute`, `hour`, `dayOfMonth`, `month`, `dayOfWeek`), lists, ranges, steps, Sunday normalization (0 and 7), calendar feasibility validation (`ValidateCronFeasibility`), POSIX day matching (DOM/DOW union vs intersection), and 35-day forward lookahead calculation (`GetNextCronRunAt`).
+  - `internal/scheduler/types.go`: Core types and interfaces (`ScheduleMode`, `ScheduleConfig`, `Job`, `SimpleJob`, `RunStatus`, `RunResult`, `MetricsRecorder`, `NoopMetricsRecorder`).
+  - `internal/scheduler/task.go`: `taskState` holding per-worker execution mutex and active running flag, implementing overlap prevention, structured event logging, error recovery, duration tracking, and metric emission (`RunOnce`).
+  - `internal/scheduler/scheduler.go`: Central `TaskScheduler` coordinating cron and interval tasks, startup runs (`RunOnStart`), active work tracking (`activeRunsWG`, `activeCount`), graceful shutdown with 30s timeout, and database pool cleanup.
+  - `internal/scheduler/runner.go`: Command-line options parsing (`ParseRunnerArgs`: `--once`, `--safe-local-defaults`, `--help`, positional worker names, env var overrides) and signal handling (`RunWithSignals`: `SIGINT`, `SIGTERM`).
+- **Exact Cron Semantics Preserved:**
+  - **5-Field Format**: Standard `minute` (0-59), `hour` (0-23), `dayOfMonth` (1-31), `month` (1-12), `dayOfWeek` (0-7).
+  - **Lists, Ranges, Steps**: Supports commas (`1,5`), hyphens (`1-5`), and steps (`*/15`, `0-30/5`, `10/5`). Validates bounds and step positivity.
+  - **Sunday Normalization**: Sunday specified as either `0` or `7` is strictly normalized to `0`.
+  - **Day Matching Logic (POSIX / Vixie Cron)**: When both `dayOfMonth` and `dayOfWeek` are restricted, a date matches if *either* day field matches (UNION). When either is unrestricted (`*`), *both* must match (INTERSECTION).
+  - **Feasibility Verification**: Detects impossible calendar dates across all combinations of restricted months and days (e.g. Feb 31, Apr 31), while allowing leap-year Feb 29.
+  - **Search Horizon**: Minute-by-minute search strictly bounded to `CronLookaheadMinutes = 35 * 24 * 60 = 50,400` minutes (~35 days). Schedules beyond 35 days return an explicit error matching JavaScript source.
+- **Exact Overlap-Prevention Semantics:**
+  - Per-worker locking via dedicated mutex per `taskState`. Unrelated workers execute concurrently without serialization.
+  - If a scheduled tick or manual run occurs while worker is already in flight:
+    - Logs warning `"worker-runner-skip-overlap"` with `worker` and `trigger`.
+    - Returns `StatusSkipped` without executing a second concurrent run.
+    - Records overlap telemetry via `MetricsRecorder.RecordJobOverlap`.
+  - When the running worker completes (success or failure), `running` state is cleanly reset via `defer`, ensuring worker errors never permanently wedge the scheduler. Subsequent scheduled ticks execute normally.
+- **Exact Worker Execution & Lifecycle:**
+  - Triggers: `"startup"`, `"interval"`, `"cron"`, `"manual"`, `"once"`.
+  - CLI `--once` execution: `RunOnce` executes specified workers (or all) once synchronously and returns results.
+  - Structured logging with exact event names: `"worker-runner-job-start"`, `"worker-runner-job-finish"`, `"worker-runner-job-failure"`, `"worker-runner-skip-overlap"`, `"worker-runner-next-run"`, `"worker-runner-worker-started"`, `"worker-runner-stopping"`, `"worker-runner-shutdown-timeout"`, `"worker-runner-pool-close-failure"`, `"worker-runner-exit-on-error"`.
+  - Automatic secret scrubbing: all error messages and payloads scrub credentials and tokens (`[REDACTED]`).
+- **Graceful Shutdown & Signal Handling:**
+  - Intercepts `SIGINT` and `SIGTERM`.
+  - Idempotent and concurrency-safe: multiple concurrent `Stop()` calls execute teardown once and return identical results.
+  - Stops accepting new tasks and unregisters background tickers/timers.
+  - Drains in-flight worker executions up to `DefaultShutdownTimeout` (30 seconds).
+  - If in-flight tasks exceed timeout, logs error `"worker-runner-shutdown-timeout"` with active task count and timeout duration, then proceeds to database cleanup.
+  - Closes PostgreSQL pool via `dbCloser()`.
+- **Database Integration:**
+  - Direct reuse of `internal/database` (`*database.Database`).
+  - Connection pool lifecycle bound to scheduler teardown via `WithDatabase(db)` or `WithDBClose(fn)`.
+  - Clean separation: pool creation remains governed by `internal/database` (Step 5B.5); scheduler only manages operational closure upon shutdown.
+- **Metrics Classification (`workers/runtime/metrics.js`):**
+  - **Category A (Required by WhatBreaks):** None of the Prometheus metrics in `metrics.js` are required for scheduler correctness.
+  - **Category B (TokenTimer-Specific - Discarded):**
+    - Alert queues: `gQueueDepth`, `gQueueDueNow`, `gCooldownInEffect`, `cDelivery`, `cRetry`, `cDeniedHost`.
+    - SaaS billing limits: `cLimitWarning`, `cChannelLimitWarning`, `cLimitBlocked`, `hLatency`, `hLimitUtilRatio`, `gMonthlyChannelUsage`.
+    - Weekly token digests: `cWeeklyDigestSent`, `gWeeklyDigestProcessed`, `gWeeklyDigestTokensIncluded`, `gWeeklyDigestLastRun`, `gWeeklyDigestLastRunSuccess`, `gDeliveryLastSuccessUnix`, `gWeeklyDigestLastSentUnix`.
+    - Provider auto-sync: `cAutoSync`, `cAutoSyncItems`, `gAutoSyncLastRun`.
+    - Pushgateway POST/PUT reporting (`pushMetrics` with `jobName: "tokentimer-alerts"`).
+  - **Category C (Useful for Future Telemetry):**
+    - `gRunnerUp` (`runner_up`): heartbeat gauge indicating worker component is alive.
+    - `cLogError` (`app_log_errors_total`): error counter by service.
+    - Abstracted through `MetricsRecorder` interface (`RecordJobStart`, `RecordJobFinish`, `RecordJobFailure`, `RecordJobOverlap`, `RecordHeartbeat`), decoupling scheduler core from concrete Prometheus libraries.
+- **Tests Added:**
+  - `internal/scheduler/cron_test.go`:
+    - `TestParseCronExpression_Valid`: wildcards, numbers, lists, ranges, steps, Sunday normalization (7 -> 0).
+    - `TestParseCronExpression_Errors`: empty, 4 fields, 6 fields, empty item, invalid step, zero step, range start > end, malformed range, non-integer, negative, out of bounds.
+    - `TestValidateCronFeasibility`: Feb 31, Apr 31, leap Feb 29, unrestricted.
+    - `TestCronMatchesDate_DayUnionIntersection`: both unrestricted, DOM only, DOW only, DOM || DOW union rule.
+    - `TestGetNextCronRunAt_Calculation`: next minute, next hour, next day.
+    - `TestGetNextCronRunAt_LookaheadHorizon`: 35-day (50,400 minutes) boundary enforcement and zero date handling.
+  - `internal/scheduler/task_test.go`:
+    - `TestTaskState_SuccessRun`: status, duration, telemetry, logs.
+    - `TestTaskState_FailureRun`: error propagation, duration, state recovery (running reset to false).
+    - `TestTaskState_OverlapPrevention`: in-flight task causes next tick to skip with warning and metric, completing allows next run.
+    - `TestTaskState_MultipleDifferentTasks_DoNotBlock`: concurrent execution of independent tasks.
+    - `TestTaskState_ConcurrentOverlap_Stress`: 20 concurrent goroutines triggering same task, max in-flight strictly <= 1.
+  - `internal/scheduler/scheduler_test.go`:
+    - `TestScheduler_Registration`: valid configs, duplicate prevention, post-start/stop rejection.
+    - `TestScheduler_RunOnce`: single worker, all workers, unknown worker.
+    - `TestScheduler_Interval_RunOnStartAndTicks`: startup execution and interval tick looping.
+    - `TestScheduler_GracefulShutdown_DrainActiveRuns`: in-flight task drained before return.
+    - `TestScheduler_ShutdownTimeout`: 50ms timeout warning when task stuck.
+    - `TestScheduler_ShutdownIdempotencyAndConcurrency`: 25 concurrent callers with single DB close.
+    - `TestScheduler_DBCloseError`: DB close failure logged and returned.
+    - `TestScheduler_ExitOnError`: worker error shuts down scheduler.
+    - `TestScheduler_SecretRedactionInLogs`: sensitive tokens scrubbed in logs.
+  - `internal/scheduler/runner_test.go`:
+    - `TestParseRunnerArgs`: `--once`, `--safe-local-defaults`, `--help`, positional filtering, env overrides.
+    - `TestRunWithSignals_GracefulShutdown`: SIGINT triggers graceful shutdown.
+- **Race Detector:** Full workspace verified with `go test -count=1 -race ./...` (0 data races).
+- **Untouched Source Files:**
+  - `workers/runtime/runner.js` (UNTOUCHED)
+  - `workers/runtime/metrics.js` (UNTOUCHED)
+
 
 
 
