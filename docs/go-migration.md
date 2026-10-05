@@ -30,7 +30,7 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 4 | `kubernetes/controller/runtime.js` | In-flight execution tracking (`trackWork`) and active task completion barrier | None | `kubernetes/controller/index.js` | **LOW** (Work state) | `internal/lifecycle` | P1 | **MIGRATED (Step 5B.4)** |
 | 5 | `kubernetes/controller/logger.js` | Controller JSON logger wrapping `@tokentimer/log-scrub` | `@tokentimer/log-scrub` | Controller modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 6 | `kubernetes/controller/ports.js` | Integer port parsing and range validation `[1, 65535]` | None | `kubernetes/controller/config.js` | **LOW** (Config validation) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
-| 7 | `kubernetes/controller/index.js` | Controller bootstrapper; contains dummy stub objects for `kubernetesClient` & `reporter` | Controller submodules | Process execution | **MEDIUM** (Process entrypoint) | `cmd/wb` + `internal/platform` | P2 | **MIGRATED (Step 5B.8 - Category A; Category B deferred to Step 5B.9)** |
+| 7 | `kubernetes/controller/index.js` | Controller bootstrapper; contains dummy stub objects for `kubernetesClient` & `reporter` | Controller submodules | Process execution | **MEDIUM** (Process entrypoint) | `cmd/wb` + `internal/platform` + `internal/collector/k8s` | P2 | **MIGRATED (Step 5B.8 Platform Bootstrap + Step 5B.9 Real K8s Collector)** |
 | 8 | `packages/log-scrub/index.js` | Field-name redaction rules and deep value sanitization | `./secret-material.js` | Loggers | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 9 | `packages/log-scrub/secret-material.js` | Content-based cryptographic secret/key detection (PEM, DER, PKCS#1/#8, SEC1, JKS magic, PFX) | `node:crypto`, `node:zlib` | `packages/log-scrub/index.js` | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 10 | `packages/config/src/database.js` | PostgreSQL connection config parsing, SSL mode flags, and connection pool parameters | None | `packages/config/src/index.js`, `workers/runtime/db.js` | **HIGH** (DB credentials & TLS) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
@@ -225,7 +225,7 @@ Based on the dependency analysis, the safest implementation sequence for future 
 6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: **COMPLETED ✅**
 7. **Step 5B.7 — Scheduler & Task Runner (`internal/scheduler`)**: **COMPLETED ✅**
 8. **Step 5B.8 — API Layer & Middleware (`internal/api` + `internal/platform`)**: **COMPLETED ✅**
-9. **Step 5B.9 — Kubernetes Collector (`internal/collector/k8s`)**: Build new Go-native Kubernetes collector using `client-go` and feed evidence into `internal/coreclient`.
+9. **Step 5B.9 — Kubernetes Collector (`internal/collector/k8s`)**: **COMPLETED ✅**
 
 ---
 
@@ -747,6 +747,81 @@ Based on the dependency analysis, the safest implementation sequence for future 
   - `infrastructure/api/middleware/rateLimit.js` (UNTOUCHED)
   - `infrastructure/api/routes/health.js` (UNTOUCHED)
   - `kubernetes/controller/index.js` (UNTOUCHED)
+
+---
+
+## 16. Subsystem Migration Status: Step 5B.9 Real WhatBreaks Kubernetes Collector
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Architecture Philosophy:**
+  - **COLLECTORS OBSERVE. CORE ENGINE UNDERSTANDS.**
+  - The collector observes Kubernetes infrastructure and produces normalized `*corev1.Evidence` point-in-time records.
+  - The collector contains no graph construction, traversal, blast-radius calculation, impact analysis, or relationship arbitration. Downstream DiscoveryRules in the Rust Core Engine derive relationships from collector evidence.
+- **Go Destination:** `internal/collector/k8s/`
+  - `types.go`: Canonical Kubernetes resource data structures (`Namespace`, `Node`, `Pod`, `Deployment`, `Service`, `Ingress`, `ConfigMap`, `SecretMetadata`, `PersistentVolumeClaim`, `PersistentVolume`, `WatchEvent`). Defines `SecretMetadata` with hard security boundary: zero `.data` or `stringData` fields.
+  - `identity.go`: Deterministic `ResourceIdentity` construction with cluster, workspace, and namespace multi-tenant scoping (`<cluster_id>/<namespace>/<name>` and `<cluster_id>/<name>`).
+  - `client.go`: Strictly read-only Kubernetes REST Client (`GET`, `LIST`, `WATCH`) implementing Bearer token auth, TLS CA configuration, streaming watch chunk decoding, status code classification (401, 403, 404, 429, 503), and zero mutation endpoints.
+  - `evidence.go`: Normalizer transforming raw Kubernetes objects into immutable `*corev1.Evidence` records across standard observation types: `CONFIGURATION`, `RESOURCE_REFERENCE`, `OWNERSHIP_REFERENCE`, `RUNTIME_CONNECTION`, `NETWORK_OBSERVATION`.
+  - `collector.go`: Collector engine orchestrating sweeps, namespace discovery, RBAC error isolation, lifecycle coordination, and optional submission to the Rust Core Engine via `internal/coreclient`.
+  - `options.go`: Functional options for cluster ID, workspace ID, namespaces, cluster-wide mode, client injection, logger, and reconcile interval.
+- **Supported Kubernetes Resources:**
+  - `Namespace` (cluster-scoped)
+  - `Node` (cluster-scoped)
+  - `Deployment` (namespaced)
+  - `Service` (namespaced)
+  - `Ingress` (namespaced)
+  - `Pod` (namespaced)
+  - `ConfigMap` (namespaced)
+  - `Secret` (namespaced - metadata and key names ONLY)
+  - `PersistentVolumeClaim` (namespaced)
+  - `PersistentVolume` (cluster-scoped)
+- **Secret Safety Policy (Hard Security Boundary):**
+  - Collector strictly strips and never deserializes secret payloads (`.data` or `.stringData`).
+  - Secret evidence contains only safe metadata: name, namespace, type, and key names.
+  - References from workloads (Deployments, Pods, Ingresses) reference Secret resources by name only.
+  - Private keys, certificates, passwords, and service account tokens are completely prevented from entering evidence.
+- **Read-Only Guarantee:**
+  - The collector and client expose zero mutation methods (`CREATE`, `UPDATE`, `PATCH`, `DELETE`, `EXEC`, `PORT-FORWARD`, `PROXY` are nonexistent).
+  - All HTTP requests exclusively use `http.MethodGet`.
+- **Core Engine Integration:**
+  - Collector normalizes Service clusterIP endpoints and Pod IP endpoints as `RESOURCE_REFERENCE` evidence (`{"address": ip, "port": port}`).
+  - Observed runtime connections are normalized as `RUNTIME_CONNECTION` evidence (`{"destination": ip, "port": port, "protocol": "tcp"}`).
+  - Submitted directly to the Rust Core Engine via `coreclient.Client.RunDiscoveryWithEvidence`, enabling Rust's `RuntimeConnectionRule` to derive directional `DEPENDS_ON` relationships.
+- **Persistence & Storage Decision:**
+  - The collector is strictly stateless; observations flow directly into `coreclient` or downstream pipelines without creating a redundant or speculative secondary database.
+- **Tests Added:**
+  - `internal/collector/k8s/identity_test.go`:
+    - `TestIdentity_Namespaced`: namespaced provider_id formatting and parsing.
+    - `TestIdentity_ClusterScoped`: cluster-scoped provider_id formatting and parsing.
+    - `TestIdentity_NoClusterID`: fallback formatting when cluster ID omitted.
+    - `TestIdentity_MultiClusterIsolation`: proof that identical resource names across clusters produce distinct ProviderIDs.
+    - `TestIdentity_BuildSource`: provenance source verification.
+  - `internal/collector/k8s/secret_safety_test.go`:
+    - `TestSecretSafety_NeverSerializesPayloads`: regression test verifying passwords, private keys, and SA tokens in API responses never enter Evidence.Data.
+    - `TestSecretSafety_WorkloadReferencesNameOnly`: regression test verifying secret references in Pods/Deployments reference names only.
+  - `internal/collector/k8s/client_test.go`:
+    - `TestClient_ListOperations`: read-only list operations across all 10 resource types and assertion of GET method usage.
+    - `TestClient_ErrorClassification`: classification of 401, 403, 404, 429, 500 errors.
+    - `TestClient_WatchStreaming`: streaming chunked JSON watch events (`ADDED`, `MODIFIED`, `DELETED`).
+  - `internal/collector/k8s/evidence_test.go`:
+    - `TestNormalizer_Deployment`: configuration data, owner references, SA refs, secret refs, CM refs.
+    - `TestNormalizer_Service_EndpointMapping`: verification of address/port evidence for `RuntimeConnectionRule`.
+    - `TestNormalizer_Ingress`: backend service references and TLS secret references.
+    - `TestNormalizer_PVC_and_PV`: volume claim binding references.
+  - `internal/collector/k8s/collector_test.go`:
+    - `TestCollector_ClusterWideCollect`: end-to-end read-only sweep across cluster and namespaced resources.
+    - `TestCollector_NamespaceScoped_GracefulRBACDenial`: graceful degradation when one namespace is forbidden (403).
+    - `TestCollector_CoreClientNotBound`: error validation when CoreClient is not provided.
+  - `internal/collector/k8s/lifecycle_test.go`:
+    - `TestCollector_Lifecycle`: startup, readiness, stop accepting work, and clean shutdown.
+    - `TestCollector_ConcurrentStop`: concurrency safety and idempotency under concurrent Stop calls.
+  - `internal/collector/k8s/core_integration_test.go`:
+    - `TestCollector_CoreEngineIntegration`: spawns real Rust `wb-core-server`, normalizes Service and Pod evidence, submits to Rust gRPC DiscoveryService, and verifies derived `api-backend --DEPENDS_ON--> postgres-service` relationship!
+- **Race Detector:** Full workspace passed with `go test -count=1 -race ./...` (0 data races).
+- **Rust Engine Server:** `cargo check --workspace` and `cargo test --workspace` passed (79 tests ok).
+- **Untouched Source Files:**
+  - All 31 JavaScript source files remain untouched.
+
 
 
 

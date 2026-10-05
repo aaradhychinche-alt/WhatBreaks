@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/api"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/collector/k8s"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/config"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/health"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
@@ -41,6 +43,11 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, te
 	apiPort := fs.Int("api-port", api.DefaultPort, "HTTP API server port")
 	healthPort := fs.Int("health-port", config.DefaultHealthPort, "HTTP health probe server port")
 	coreAddr := fs.String("core-engine-addr", config.DefaultCoreEngineAddress, "Rust Core Engine gRPC endpoint")
+	k8sEnable := fs.Bool("enable-k8s", false, "Enable Kubernetes collector")
+	k8sAPIURL := fs.String("k8s-api-url", "", "Kubernetes API server URL")
+	k8sClusterID := fs.String("k8s-cluster-id", "", "Kubernetes cluster identifier")
+	k8sClusterWide := fs.Bool("k8s-cluster-wide", false, "Enable cluster-wide Kubernetes collection")
+	k8sNamespaces := fs.String("k8s-namespaces", "", "Comma-separated list of namespaces to observe")
 
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -107,12 +114,46 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, te
 	sched := scheduler.New(scheduler.WithLogger(logger))
 
 	// 4. Assembled Platform
-	app := platform.New(cfg, logger, nil,
+	var platformOpts []platform.Option
+	platformOpts = append(platformOpts,
 		platform.WithAPIServer(apiSrv),
 		platform.WithHealthServer(healthSrv),
 		platform.WithHealthState(healthState),
 		platform.WithScheduler(sched),
 	)
+
+	if *k8sEnable || *k8sAPIURL != "" {
+		k8sClient, err := k8s.NewRESTClient(k8s.ClientConfig{
+			BaseURL: *k8sAPIURL,
+			Logger:  logger,
+		})
+		if err != nil {
+			logger.Error("Failed to initialize Kubernetes client", "error", err)
+			return 1
+		}
+		var namespaces []string
+		if *k8sNamespaces != "" {
+			for _, ns := range strings.Split(*k8sNamespaces, ",") {
+				if t := strings.TrimSpace(ns); t != "" {
+					namespaces = append(namespaces, t)
+				}
+			}
+		}
+		k8sCol, err := k8s.New(
+			k8s.WithClient(k8sClient),
+			k8s.WithClusterID(*k8sClusterID),
+			k8s.WithClusterWide(*k8sClusterWide),
+			k8s.WithNamespaces(namespaces...),
+			k8s.WithLogger(logger),
+		)
+		if err != nil {
+			logger.Error("Failed to initialize Kubernetes collector", "error", err)
+			return 1
+		}
+		platformOpts = append(platformOpts, platform.WithK8sCollector(k8sCol))
+	}
+
+	app := platform.New(cfg, logger, nil, platformOpts...)
 
 	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer startCancel()

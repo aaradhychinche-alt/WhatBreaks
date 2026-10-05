@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/api"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/collector/k8s"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/config"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/coreclient"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/database"
@@ -24,6 +25,7 @@ type Platform struct {
 	Scheduler    *scheduler.TaskScheduler
 	APIServer    *api.Server
 	HealthServer *health.Server
+	K8sCollector *k8s.Collector
 	CoreClient   *coreclient.Client
 	Lifecycle    *lifecycle.ControllerLifecycle
 	Runtime      *lifecycle.Runtime
@@ -79,6 +81,13 @@ func WithHealthState(hs *health.State) Option {
 func WithLifecycle(lc *lifecycle.ControllerLifecycle) Option {
 	return func(p *Platform) {
 		p.Lifecycle = lc
+	}
+}
+
+// WithK8sCollector assigns an initialized Kubernetes Collector instance to Platform.
+func WithK8sCollector(col *k8s.Collector) Option {
+	return func(p *Platform) {
+		p.K8sCollector = col
 	}
 }
 
@@ -158,7 +167,24 @@ func (p *Platform) Start(ctx context.Context) error {
 		}
 	}
 
-	// 4. Update health state
+	// 4. Start Kubernetes Collector if configured
+	if p.K8sCollector != nil {
+		if err := p.K8sCollector.Start(ctx); err != nil {
+			p.Logger.Error("Failed to start Kubernetes collector", "error", err.Error())
+			if p.Scheduler != nil {
+				_ = p.Scheduler.Stop(ctx)
+			}
+			if p.APIServer != nil {
+				_ = p.APIServer.Close()
+			}
+			if p.HealthServer != nil {
+				_ = p.HealthServer.Close()
+			}
+			return fmt.Errorf("platform: k8s collector failed: %w", err)
+		}
+	}
+
+	// 5. Update health state
 	p.HealthState.SetHealthy(true)
 	p.HealthState.SetReady(true)
 	p.running = true
@@ -200,7 +226,14 @@ func (p *Platform) Stop(ctx context.Context) error {
 		}
 	}
 
-	// 3. Drain in-flight tasks through WorkTracker
+	// 3. Stop Kubernetes Collector
+	if p.K8sCollector != nil {
+		if err := p.K8sCollector.Stop(ctx); err != nil {
+			p.Logger.Warn("Kubernetes collector stop returned error", "error", err.Error())
+		}
+	}
+
+	// 4. Drain in-flight tasks through WorkTracker
 	if p.Tracker != nil {
 		if err := p.Tracker.WaitForIdle(ctx); err != nil {
 			p.Logger.Warn("Platform shutdown wait completed with error", "error", err.Error())
