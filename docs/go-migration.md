@@ -26,8 +26,8 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 |---|------|----------------|--------------|---------------------|----------------------|----------------|----------|----------------|
 | 1 | `kubernetes/controller/config.js` | Controller environment validation, forbidden var checks, token file permission check, API URL parsing | `node:fs`, `node:url`, `./ports.js`, `@tokentimer/config` | `kubernetes/controller/index.js` | **HIGH** (Token file security, SSRF check) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 2 | `kubernetes/controller/health-server.js` | HTTP liveness (`/healthz`) and readiness (`/readyz`) probe server | `node:http` | `kubernetes/controller/index.js`, `lifecycle.js` | **LOW** (Liveness/Readiness probes) | `internal/health` | P1 | **MIGRATED (Step 5B.3)** |
-| 3 | `kubernetes/controller/lifecycle.js` | State management (`starting`, `running`, `stopping`, `stopped`), signal handling (SIGTERM, SIGINT), graceful timeout drain | None | `kubernetes/controller/index.js` | **MEDIUM** (Clean teardown, resource leak prevention) | `internal/lifecycle` | P1 | **MUST MIGRATE** |
-| 4 | `kubernetes/controller/runtime.js` | In-flight execution tracking (`trackWork`) and active task completion barrier | None | `kubernetes/controller/index.js` | **LOW** (Work state) | `internal/lifecycle` | P1 | **MUST MIGRATE** |
+| 3 | `kubernetes/controller/lifecycle.js` | State management (`starting`, `running`, `stopping`, `stopped`), signal handling (SIGTERM, SIGINT), graceful timeout drain | None | `kubernetes/controller/index.js` | **MEDIUM** (Clean teardown, resource leak prevention) | `internal/lifecycle` | P1 | **MIGRATED (Step 5B.4)** |
+| 4 | `kubernetes/controller/runtime.js` | In-flight execution tracking (`trackWork`) and active task completion barrier | None | `kubernetes/controller/index.js` | **LOW** (Work state) | `internal/lifecycle` | P1 | **MIGRATED (Step 5B.4)** |
 | 5 | `kubernetes/controller/logger.js` | Controller JSON logger wrapping `@tokentimer/log-scrub` | `@tokentimer/log-scrub` | Controller modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 6 | `kubernetes/controller/ports.js` | Integer port parsing and range validation `[1, 65535]` | None | `kubernetes/controller/config.js` | **LOW** (Config validation) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
 | 7 | `kubernetes/controller/index.js` | Controller bootstrapper; contains dummy stub objects for `kubernetesClient` & `reporter` | Controller submodules | Process execution | **MEDIUM** (Process entrypoint) | `cmd/wb` + `internal/platform` | P2 | **REPLACE / REDESIGN** |
@@ -220,7 +220,7 @@ Based on the dependency analysis, the safest implementation sequence for future 
 1. **Step 5B.1 — Configuration Subsystem (`internal/config`)**: **COMPLETED ✅**
 2. **Step 5B.2 — Logging & Secret Scrubbing (`internal/logging`)**: **COMPLETED ✅**
 3. **Step 5B.3 — Health Server & Probes (`internal/health`)**: **COMPLETED ✅**
-4. **Step 5B.4 — Lifecycle & Graceful Drain (`internal/lifecycle`)**: Port state machine, signal listeners, and in-flight work tracker.
+4. **Step 5B.4 — Lifecycle & Graceful Drain (`internal/lifecycle`)**: **COMPLETED ✅**
 5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: Implement PostgreSQL pool and `hash32` advisory locking with `pgx`.
 6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: Port timing-safe worker token verification and session security helpers.
 7. **Step 5B.7 — Scheduler & Task Runner (`internal/scheduler`)**: Implement cron/interval job scheduler and overlap prevention.
@@ -358,5 +358,106 @@ Based on the dependency analysis, the safest implementation sequence for future 
 - **Untouched Source Files:**
   - `kubernetes/controller/health-server.js` (UNTOUCHED)
   - `infrastructure/api/routes/health.js` (UNTOUCHED)
+
+---
+
+## 11. Subsystem Migration Status: Step 5B.4 Lifecycle + Runtime Subsystem
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Files Inspected:**
+  1. `kubernetes/controller/lifecycle.js`: Controller lifecycle coordinator (startup, running phase, signal handling, graceful shutdown sequence, error handling, exit code management, health status reporting).
+  2. `kubernetes/controller/runtime.js`: Work tracker and port orchestrator (in-flight tracking via `activeWorkCount`, `acceptingWork` barrier, dependent port startup and shutdown sequencing, idle barrier waiting with timeout).
+  3. `kubernetes/controller/ports.js`: Port lifecycle defaults (`UnavailablePort` with `isAlive=true`, `isReady=false`).
+- **Go Destination:** `internal/lifecycle/`
+  - `internal/lifecycle/phase.go`: Typed `Phase` enum constants (`starting`, `running`, `stopping`, `stopped`, `failed`) and state transition validation (`IsValidTransition`, `IsTerminal`).
+  - `internal/lifecycle/errors.go`: Coded errors (`CodedError`) with `Code()` matching exact JavaScript error codes: `CONTROLLER_STARTUP_FAILED`, `CONTROLLER_SHUTDOWN_FAILED`, `CONTROLLER_STOPPING`, `INVALID_CONFIG`.
+  - `internal/lifecycle/ports.go`: `Port` interface (`Start`, `StopAcceptingWork`, `Close`, `IsAlive`, `IsReady`), `UnavailablePort` (matching JS default port behavior), and `BasePort` for tests.
+  - `internal/lifecycle/runtime.go`: `Runtime` controller (`NewRuntime`, `Start`, `StopAcceptingWork`, `TrackWork`, `WaitForIdle`, `Close`, `IsAlive`, `IsReady`, `IsAcceptingWork`, `IsStarted`, `ActiveCount`), along with backward-compatible `SimpleTracker`.
+  - `internal/lifecycle/lifecycle.go`: `ControllerLifecycle` (`NewControllerLifecycle`, `Start`, `Shutdown`, `Status`, `Phase`, `InstallSignalHandlers`, `ExitCode`, `HasExited`, `IsShutdownRequested`), and interfaces `HealthServer` and `RuntimeController`.
+  - `internal/lifecycle/manager.go`: Platform `Manager` interface preserved for skeleton compatibility.
+- **Lifecycle States & Transitions:**
+  - Expected states: `starting`, `running`, `stopping`, `stopped`, `failed`.
+  - Valid transitions:
+    - `starting` -> `running`, `stopping`, `failed`
+    - `running` -> `stopping`, `failed`
+    - `stopping` -> `stopped`, `failed`
+    - Terminal states: `stopped`, `failed`
+  - Invalid transitions (enforced and tested):
+    - `stopped` -> `running`, `starting`, `stopping`, `failed`
+    - `failed` -> `running`, `starting`, `stopping`, `stopped`
+    - `running` -> `starting`
+    - `stopping` -> `running`
+- **Startup Sequence:**
+  1. Process begins in `starting` phase.
+  2. `healthServer.Listen()`. If error, transition to `failed`, run concurrent cleanup (`runtime.StopAcceptingWork()`, `healthServer.Close()`, `runtime.Close()`), log `controller-startup-failed` with code, invoke `exitProcess(1)`, and return error.
+  3. Check if shutdown was requested concurrently; if so, return early.
+  4. `runtime.Start()`:
+     a. Starts reporter port (`reporter.Start()`). If error, reset `acceptingWork = false` and return error.
+     b. Sets `acceptingWork = true`.
+     c. Starts client port (`client.Start()`). If error, reset `acceptingWork = false` and return error.
+     d. Sets `started = true`.
+  5. Check if shutdown was requested concurrently; if so, return early.
+  6. Phase becomes `running`.
+  7. Log info `controller-started`.
+- **Shutdown Sequence:**
+  1. Idempotency guard: if shutdown was already requested, await completion channel and return cached exit code & error.
+  2. Set `shutdownRequested = true`, phase becomes `stopping`.
+  3. Unregister signal handlers immediately to avoid signal loops.
+  4. Log info `controller-stopping` with triggering signal.
+  5. Await in-flight startup if startup was initiated.
+  6. Sequential teardown steps:
+     a. `runtime.StopAcceptingWork(ctx)`: sets `acceptingWork = false`, calls `client.StopAcceptingWork()` and `reporter.StopAcceptingWork()` concurrently.
+     b. `runtime.WaitForIdle(ctx, shutdownTimeout)`: waits for active work count to drop to 0. If timeout expires, log warn `controller-shutdown-timeout` with `shutdownTimeoutMs`, but proceed with cleanup.
+     c. `healthServer.Close()`.
+     d. `runtime.Close(ctx)`: sets `acceptingWork = false`, calls `client.Close()` and `reporter.Close()` concurrently.
+  7. Determine outcome: if any teardown step failed, phase becomes `failed`, exitCode = 1, log error `controller-shutdown-failed`. If all succeeded, phase becomes `stopped`, exitCode = 0, log info `controller-stopped`.
+  8. Call `exitOnce(exitCode)`.
+- **acceptingWork Semantics:**
+  - Initially `false` before startup.
+  - Set to `true` during `runtime.Start()` strictly after reporter starts and before client starts.
+  - Reset to `false` if startup fails or when `StopAcceptingWork` is invoked.
+  - Monotonically `false` once stopping begins.
+  - Any attempt to track work when `acceptingWork == false` immediately fails with `ErrControllerStopping` (`"CONTROLLER_STOPPING"`).
+- **Work Tracking & waitForIdle:**
+  - `TrackWork(fn)` increments `activeWorkCount`, executes `fn()`, and decrements `activeWorkCount` on exit. When the count drops to 0, `idleCh` is closed.
+  - `WaitForIdle(ctx, timeout)` returns `true` immediately if `activeWorkCount == 0`. Otherwise waits on `idleCh`, timeout timer, or context cancellation without goroutine leaks.
+- **Signal Handling:**
+  - `InstallSignalHandlers` captures `SIGINT` and `SIGTERM`.
+  - Signal triggers `Shutdown(ctx, signalName)`.
+  - Handlers are immediately removed upon entering `Shutdown` to avoid repeated triggers.
+  - Returns a cleanup function allowing clean unregistration.
+- **Health Integration:**
+  - `ControllerLifecycle.Status()` returns `health.ControllerStatus` (`Healthy`, `Ready`, `Phase`).
+  - Implements `health.StatusProvider` without introducing circular dependencies.
+  - Controller is healthy only when `Phase == PhaseRunning` and `runtime.IsAlive()`.
+  - Controller is ready only when healthy and `runtime.IsReady()`.
+- **Concurrency & Race Safety:**
+  - Full race safety verified via `go test -race ./internal/lifecycle/...` (0 races detected).
+  - Mutexes guard state transitions; cached completion channels guard idempotency.
+- **Tests Added:**
+  - `internal/lifecycle/phase_test.go` (embedded in `lifecycle_test.go`): `TestPhase_StateTransitions` (all valid, invalid, and terminal transitions).
+  - `internal/lifecycle/lifecycle_test.go`:
+    - `TestControllerLifecycle_NormalStartup`: validates ordering, status, phase transition, and logs.
+    - `TestControllerLifecycle_StartupFailure_Health`: validates failure phase, cleanup execution, exit code 1, and error logging.
+    - `TestControllerLifecycle_StartupFailure_Runtime`: validates failure phase, cleanup execution, exit code 1.
+    - `TestControllerLifecycle_ShutdownSequence`: validates exact 4-step teardown ordering, phase, exit code 0, and logs.
+    - `TestControllerLifecycle_ShutdownTimeout`: validates warning log on timeout and continued teardown.
+    - `TestControllerLifecycle_ShutdownFailure`: validates teardown error handling, exit code 1, and failure logging.
+    - `TestControllerLifecycle_ShutdownIdempotency`: validates sequential calls return identical results and execute teardown once.
+    - `TestControllerLifecycle_ShutdownConcurrent`: validates 20 concurrent shutdown callers with zero race conditions.
+    - `TestControllerLifecycle_ShutdownWhileStartInFlight`: validates graceful shutdown synchronization when start is blocked.
+    - `TestControllerLifecycle_SignalHandling`: validates signal interception, shutdown trigger, and handler unregistration.
+  - `internal/lifecycle/runtime_test.go`:
+    - `TestRuntime_StartupOrder`: validates reporter starts before client.
+    - `TestRuntime_StartupFailure_Reporter`: validates error propagation and acceptingWork reset.
+    - `TestRuntime_StartupFailure_Client`: validates error propagation and acceptingWork reset.
+    - `TestRuntime_WorkTrackingAndStopping`: validates rejection when stopping and active count tracking.
+    - `TestRuntime_WaitForIdle`: validates timeout vs release behavior.
+    - `TestRuntime_ConcurrentCallers`: validates 50 goroutines executing work concurrently.
+    - `TestRuntime_CloseConcurrently`: validates concurrent closing of ports.
+- **Untouched Source Files:**
+  - `kubernetes/controller/lifecycle.js` (UNTOUCHED)
+  - `kubernetes/controller/runtime.js` (UNTOUCHED)
+
 
 
