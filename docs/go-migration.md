@@ -30,7 +30,7 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 4 | `kubernetes/controller/runtime.js` | In-flight execution tracking (`trackWork`) and active task completion barrier | None | `kubernetes/controller/index.js` | **LOW** (Work state) | `internal/lifecycle` | P1 | **MIGRATED (Step 5B.4)** |
 | 5 | `kubernetes/controller/logger.js` | Controller JSON logger wrapping `@tokentimer/log-scrub` | `@tokentimer/log-scrub` | Controller modules | **HIGH** (Secret scrubbing) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 6 | `kubernetes/controller/ports.js` | Integer port parsing and range validation `[1, 65535]` | None | `kubernetes/controller/config.js` | **LOW** (Config validation) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
-| 7 | `kubernetes/controller/index.js` | Controller bootstrapper; contains dummy stub objects for `kubernetesClient` & `reporter` | Controller submodules | Process execution | **MEDIUM** (Process entrypoint) | `cmd/wb` + `internal/platform` | P2 | **REPLACE / REDESIGN** |
+| 7 | `kubernetes/controller/index.js` | Controller bootstrapper; contains dummy stub objects for `kubernetesClient` & `reporter` | Controller submodules | Process execution | **MEDIUM** (Process entrypoint) | `cmd/wb` + `internal/platform` | P2 | **MIGRATED (Step 5B.8 - Category A; Category B deferred to Step 5B.9)** |
 | 8 | `packages/log-scrub/index.js` | Field-name redaction rules and deep value sanitization | `./secret-material.js` | Loggers | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 9 | `packages/log-scrub/secret-material.js` | Content-based cryptographic secret/key detection (PEM, DER, PKCS#1/#8, SEC1, JKS magic, PFX) | `node:crypto`, `node:zlib` | `packages/log-scrub/index.js` | **CRITICAL** (Zero Secret Custody enforcement) | `internal/logging` | P1 | **MIGRATED (Step 5B.2)** |
 | 10 | `packages/config/src/database.js` | PostgreSQL connection config parsing, SSL mode flags, and connection pool parameters | None | `packages/config/src/index.js`, `workers/runtime/db.js` | **HIGH** (DB credentials & TLS) | `internal/config` | P1 | **MIGRATED (Step 5B.1)** |
@@ -42,9 +42,9 @@ Every single JavaScript file in the repository has been inspected, analyzed, and
 | 16 | `workers/runtime/metrics.js` | Prometheus metrics for TokenTimer certificate alert queues and digests | `prom-client` | Worker runtime | **LOW** (Telemetry) | `internal/metrics` (future) | P3 | **CLASSIFIED / REDESIGN** |
 | 17 | `workers/runtime/proxy-compat-check.js` | Warns if Node.js runtime does not support `NODE_USE_ENV_PROXY=1` | `@tokentimer/node-compat` | `workers/runtime/runner.js` | **NONE** (Runtime glue) | None (Go stdlib handles proxies) | N/A | **DISCARD** |
 | 18 | `workers/runtime/runner.js` | 5-field cron parser, lookahead calendar calculation, interval timer, overlap prevention, `--once` mode | `./db.js`, `./logger.js`, `./is-node-entrypoint.js` | Worker runners | **MEDIUM** (Task concurrency & execution) | `internal/scheduler` | P2 | **MIGRATED (Step 5B.7)** |
-| 19 | `infrastructure/api/index.js` | Express HTTP server setup (Helmet security headers, CORS, body size limits, error handling) | `express`, `cors`, `helmet`, `./routes/health.js` | API entrypoint | **HIGH** (API boundary security) | `internal/api` | P2 | **REPLACE / REDESIGN** |
-| 20 | `infrastructure/api/middleware/csrf.js` | Double-submit cookie CSRF protection | `csrf-csrf`, `session-cookie-options.js` | `infrastructure/api/index.js` | **HIGH** (Web CSRF defense) | `internal/api/middleware` | P2 | **SHOULD MIGRATE / REPLACE** |
-| 21 | `infrastructure/api/middleware/rateLimit.js` | Global, slowdown, and authenticated user/IP rate limiters | `express-rate-limit`, `express-slow-down` | `infrastructure/api/index.js` | **HIGH** (Abuse prevention) | `internal/api/middleware` | P2 | **SHOULD MIGRATE / REPLACE** |
+| 19 | `infrastructure/api/index.js` | Express HTTP server setup (Helmet security headers, CORS, body size limits, error handling) | `express`, `cors`, `helmet`, `./routes/health.js` | API entrypoint | **HIGH** (API boundary security) | `internal/api` | P2 | **MIGRATED (Step 5B.8)** |
+| 20 | `infrastructure/api/middleware/csrf.js` | Double-submit cookie CSRF protection | `csrf-csrf`, `session-cookie-options.js` | `infrastructure/api/index.js` | **HIGH** (Web CSRF defense) | `internal/api` | P2 | **MIGRATED (Step 5B.8)** |
+| 21 | `infrastructure/api/middleware/rateLimit.js` | Global, slowdown, and authenticated user/IP rate limiters | `express-rate-limit`, `express-slow-down` | `infrastructure/api/index.js` | **HIGH** (Abuse prevention) | `internal/api` | P2 | **MIGRATED (Step 5B.8)** |
 | 22 | `infrastructure/api/routes/health.js` | API health routes: `GET /` and `GET /health` (`SELECT 1` ping, uptime) | `express`, `database.js` | `infrastructure/api/index.js` | **LOW** (Service health) | `internal/health` | P2 | **MIGRATED (Step 5B.3)** |
 | 23 | `infrastructure/auth/auth-middleware.js` | Request auth: bearer token for worker calls, session auth, email verification | `./internal-worker-auth.js`, `logger.js` | Express routes | **CRITICAL** (API Access control) | `internal/auth` | P2 | **MIGRATED (Step 5B.6)** |
 | 24 | `infrastructure/auth/auth.js` | 100% duplicate copy of `auth-middleware.js` | `./internal-worker-auth.js` | Legacy imports | **CRITICAL** (Redundant code) | None (Single auth package) | N/A | **DISCARD** |
@@ -224,7 +224,7 @@ Based on the dependency analysis, the safest implementation sequence for future 
 5. **Step 5B.5 — Database & Advisory Locks (`internal/database`)**: **COMPLETED ✅**
 6. **Step 5B.6 — Authentication & Worker Auth (`internal/auth`)**: **COMPLETED ✅**
 7. **Step 5B.7 — Scheduler & Task Runner (`internal/scheduler`)**: **COMPLETED ✅**
-8. **Step 5B.8 — API Layer & Middleware (`internal/api`)**: Implement HTTP API, security headers, rate limiting, and route handlers.
+8. **Step 5B.8 — API Layer & Middleware (`internal/api` + `internal/platform`)**: **COMPLETED ✅**
 9. **Step 5B.9 — Kubernetes Collector (`internal/collector/k8s`)**: Build new Go-native Kubernetes collector using `client-go` and feed evidence into `internal/coreclient`.
 
 ---
@@ -663,6 +663,90 @@ Based on the dependency analysis, the safest implementation sequence for future 
 - **Untouched Source Files:**
   - `workers/runtime/runner.js` (UNTOUCHED)
   - `workers/runtime/metrics.js` (UNTOUCHED)
+
+---
+
+## 15. Subsystem Migration Status: Step 5B.8 API + Platform Migration
+
+- **Status:** **MIGRATED & VERIFIED**
+- **Go Destinations:**
+  - `internal/api/`:
+    - `config.go`: Default configuration (port 4000, 10MB limit, 30s shutdown timeout, rate limit parameters, session secret) and environment parser (`NewConfigFromEnv`, `DefaultConfig`).
+    - `security.go`: Helmet headers middleware injecting `Content-Security-Policy`, `Strict-Transport-Security`, `X-Content-Type-Options`, `X-Frame-Options: DENY`, `X-XSS-Protection: 0`, `Referrer-Policy`, and `Cross-Origin-Resource-Policy: cross-origin`.
+    - `cors.go`: CORS middleware integrating `internal/auth.BuildCorsOrigins(env)`, enforcing credentials, max-age 86400, preflight OPTIONS, and never allowing `*` with credentials.
+    - `body_limit.go`: 10MB request body size limiter with pre-checked `Content-Length` and `http.MaxBytesReader` returning `413 Payload Too Large`.
+    - `ratelimit.go`: Thread-safe process-local sliding window rate limiter with standard headers (`RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`), IP/user keying, 429 response, and path exemptions (`/`, `/health`, `/api/csrf-token`, `/api/session`, authenticated users).
+    - `csrf.go`: Double-submit HMAC-SHA256 CSRF protection, constant-time verification, cookie configuration, safe method pass-through (`GET`, `HEAD`, `OPTIONS`), worker auth bypass, and token endpoint handler (`GET /api/csrf-token`).
+    - `errors.go`: Centralized JSON error response formatter, `NotFoundHandler` (404 with `NOT_FOUND`), and `RecoveryMiddleware` (500 without leaking secrets or production stack traces).
+    - `server.go`: HTTP `Server` orchestrating middleware in exact Express pipeline order, routes (`GET /{$}`, `GET /health`, `GET /api/csrf-token`, and 404 fallback), `Listen()`, `Start()`, `Addr()`, `Shutdown()`, and `Close()`.
+  - `internal/platform/`:
+    - `platform.go`: Platform composition root assembling `Config`, `Logger`, `Database`, `Scheduler`, `APIServer`, `HealthServer`, `CoreClient`, `Lifecycle`, `Runtime`, `HealthState`, `Tracker` with functional options (`WithDatabase`, `WithScheduler`, `WithAPIServer`, `WithHealthServer`, `WithHealthState`, `WithLifecycle`). Implements ordered startup (`HealthServer` -> `APIServer` -> `Scheduler` -> `HealthState`) and ordered graceful shutdown (`SetReady(false)` -> `Scheduler.Stop` -> `Tracker.WaitForIdle` -> `APIServer.Shutdown` -> `Database.Close` -> `CoreClient.Close` -> `HealthServer.Shutdown` -> `SetHealthy(false)`).
+  - `cmd/wb/`:
+    - `main.go`: Application entrypoint assembling all subsystems, parsing CLI flags (`--api-port`, `--health-port`, `--core-engine-addr`, `version`, `--help`), validating forbidden environment variables (`WB_API_TOKEN`, `TT_API_TOKEN`, `KUBECONFIG`), handling OS signals (`SIGINT`, `SIGTERM`), and coordinating graceful teardown within 30 seconds.
+- **Authoritative JavaScript Sources Inspected:**
+  1. `infrastructure/api/index.js`
+  2. `infrastructure/api/middleware/csrf.js`
+  3. `infrastructure/api/middleware/rateLimit.js`
+  4. `infrastructure/api/routes/health.js`
+  5. `kubernetes/controller/index.js` (Category A generic bootstrap responsibilities)
+- **API Semantics Preserved:**
+  - Standard Express middleware ordering: Recovery -> Security Headers -> CORS -> Body Limits -> Rate Limiting -> CSRF -> Routing -> Error Handler.
+  - Body limit: 10MB (`DefaultMaxBodyBytes = 10 * 1024 * 1024`), returning `413 Payload Too Large` with JSON `{ "error": "Request entity too large", "code": "PAYLOAD_TOO_LARGE" }`.
+  - Security headers: CSP directives, HSTS (1 year in production with includeSubDomains), X-Frame-Options: DENY, X-Content-Type-Options: nosniff, Referrer-Policy: strict-origin-when-cross-origin.
+  - CORS: allowed origins matched exactly from `internal/auth.BuildCorsOrigins(env)`, `Access-Control-Allow-Credentials: true`, wildcard origins disallowed when credentials enabled.
+  - Rate limiting: 100 requests per 15-minute sliding window per IP/user; paths `/`, `/health`, `/api/csrf-token`, `/api/session` exempt; authenticated users exempt; standard headers `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset` injected; 429 status on limit.
+  - CSRF: HMAC-SHA256 cryptographic double-submit token signed with session secret; constant-time equality check; `GET`, `HEAD`, `OPTIONS` exempt; worker bearer auth exempt; `GET /api/csrf-token` endpoint; secure cookie attributes matching session cookie config.
+  - Health route: `GET /` returns `{ "status": "ok", "service": "whatbreaks-api" }`; `GET /health` executes `SELECT 1` ping and reports status and uptime.
+- **Explicit Boundary & Non-Migration Scope:**
+  - **Category B (Kubernetes Collector):** The real WhatBreaks Kubernetes collector and resource discovery logic is strictly deferred to Step 5B.9. No dummy or stubbed collector logic was implemented.
+- **Tests Added:**
+  - `internal/api/security_test.go`:
+    - `TestSecurityHeaders_Applied`: verifies CSP, HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Cross-Origin-Resource-Policy.
+    - `TestSecurityHeaders_ProductionHSTS`: verifies HSTS presence in production and absence in development.
+  - `internal/api/cors_test.go`:
+    - `TestCORS_AllowedOrigin`: verifies allowed origin gets echoed in headers.
+    - `TestCORS_DisallowedOrigin`: verifies non-whitelisted origin receives no CORS headers.
+    - `TestCORS_PreflightOptions`: verifies OPTIONS returns 204 with methods and headers.
+    - `TestCORS_CredentialsNotWildcard`: verifies credentialed requests never allow `*`.
+  - `internal/api/body_limit_test.go`:
+    - `TestBodyLimit_WithinLimit`: verifies requests under 10MB succeed.
+    - `TestBodyLimit_ExceedsLimit`: verifies requests over 10MB return 413.
+    - `TestBodyLimit_StreamingExceedsLimit`: verifies streaming requests over 10MB terminate without unbounded buffering.
+  - `internal/api/ratelimit_test.go`:
+    - `TestRateLimiter_AllowWithinLimit`: verifies requests within limit succeed with rate limit headers.
+    - `TestRateLimiter_ExceedLimit`: verifies requests exceeding max return 429 with retry header.
+    - `TestRateLimiter_ExemptPaths`: verifies exempt paths bypass limiter.
+    - `TestRateLimiter_ConcurrentAccess`: verifies thread safety under 20 concurrent workers.
+  - `internal/api/csrf_test.go`:
+    - `TestCSRF_SafeMethodsPass`: verifies GET, HEAD, OPTIONS pass without token.
+    - `TestCSRF_TokenGenerationAndValidation`: verifies valid token generated by manager passes POST.
+    - `TestCSRF_MissingToken`: verifies missing header returns 403.
+    - `TestCSRF_InvalidToken`: verifies mismatched signature returns 403.
+    - `TestCSRF_WorkerBypass`: verifies internal worker authentication context bypasses CSRF.
+  - `internal/api/server_test.go`:
+    - `TestAPIServer_HealthEndpoints`: verifies `GET /` and `GET /health`.
+    - `TestAPIServer_NotFoundHandler`: verifies unknown routes return 404 JSON.
+    - `TestAPIServer_CSRFEndpoint`: verifies `GET /api/csrf-token` sets cookie and returns token JSON.
+    - `TestAPIServer_GracefulShutdown`: verifies shutdown stops listener and drains requests.
+  - `internal/platform/platform_test.go`:
+    - `TestPlatform_Lifecycle`: verifies platform startup and shutdown.
+    - `TestPlatform_AssembledDependencies`: verifies platform starts API server, Health probe server, Scheduler, and cleans them up on shutdown.
+    - `TestPlatform_StartupFailureCleanup`: verifies port conflict causes clean failure and resource release.
+    - `TestPlatform_RepeatedAndConcurrentShutdown`: verifies concurrent `Stop()` calls are thread-safe and idempotent.
+  - `cmd/wb/main_test.go`:
+    - `TestMain_VersionCommand`: verifies `wb version` output.
+    - `TestMain_VersionFlag`: verifies `--version` flag.
+    - `TestMain_HelpFlag`: verifies `--help` flag.
+    - `TestMain_ForbiddenEnv`: verifies forbidden raw tokens and kubeconfig abort process.
+    - `TestMain_StartupAndShutdown`: verifies full runtime boots and context cancellation cleanly shuts down.
+- **Race Detector:** Full workspace passed with `go test -count=1 -race ./...` (0 data races).
+- **Rust Engine Server:** `cargo check --workspace` and `cargo test --workspace` passed (79 tests ok).
+- **Untouched Source Files:**
+  - `infrastructure/api/index.js` (UNTOUCHED)
+  - `infrastructure/api/middleware/csrf.js` (UNTOUCHED)
+  - `infrastructure/api/middleware/rateLimit.js` (UNTOUCHED)
+  - `infrastructure/api/routes/health.js` (UNTOUCHED)
+  - `kubernetes/controller/index.js` (UNTOUCHED)
 
 
 
