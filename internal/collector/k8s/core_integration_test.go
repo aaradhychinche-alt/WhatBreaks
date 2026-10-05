@@ -53,6 +53,7 @@ func spawnCoreServer(t *testing.T) (*coreclient.Client, func()) {
 	_ = ln.Close()
 
 	cmd := exec.Command(binPath)
+	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(), "WB_CORE_GRPC_ADDR="+addr)
 	var logs bytes.Buffer
 	cmd.Stdout = &logs
@@ -70,22 +71,30 @@ func spawnCoreServer(t *testing.T) (*coreclient.Client, func()) {
 		}
 	}
 
-	// Wait for server to accept connections
-	var client *coreclient.Client
-	for i := 0; i < 20; i++ {
-		time.Sleep(50 * time.Millisecond)
-		connCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		c, err := coreclient.Connect(connCtx, addr)
-		cancel()
-		if err == nil {
-			client = c
+	// Poll readiness: wait for TCP connectivity
+	deadline := time.Now().Add(5 * time.Second)
+	ready := false
+	for time.Now().Before(deadline) {
+		conn, dialErr := net.DialTimeout("tcp", addr, 50*time.Millisecond)
+		if dialErr == nil {
+			_ = conn.Close()
+			ready = true
 			break
 		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
-	if client == nil {
+	if !ready {
 		cleanup()
-		t.Fatalf("timed out connecting to wb-core-server at %s, logs: %s", addr, logs.String())
+		t.Fatalf("timed out waiting for wb-core-server TCP listener at %s, logs: %s", addr, logs.String())
+	}
+
+	connCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	client, err := coreclient.Connect(connCtx, addr)
+	if err != nil {
+		cleanup()
+		t.Fatalf("failed to connect to wb-core-server at %s: %v", addr, err)
 	}
 
 	return client, func() {
