@@ -15,7 +15,9 @@
 //! - [`impact`]: Deterministic, in-memory candidate blast radius / impact analysis engine.
 //! - [`provenance`]: In-memory relationship provenance / evidence association store.
 //! - [`history`]: Relationship observation history and current-state derivation.
+//! - [`answer`]: Deterministic, explainable product-level answer engine.
 
+pub mod answer;
 pub mod discovery;
 pub mod evidence;
 pub mod graph;
@@ -26,6 +28,10 @@ pub mod relationship;
 pub mod resource;
 pub mod traversal;
 
+pub use answer::{
+    AnswerEngine, AnswerEvidence, AnswerRelationship, AnswerRequest, ExplanationFact, ImpactAnswer,
+    ImpactPath, ImpactSummary,
+};
 pub use discovery::{
     DiscoveredRelationship, DiscoveryEngine, DiscoveryResult, DiscoveryRule, RuntimeConnectionRule,
 };

@@ -60,7 +60,6 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 
 use crate::evidence::{Evidence, EvidenceId, EvidenceSource, ObservationType};
 use crate::graph::Graph;
@@ -141,7 +140,7 @@ fn cmp_impact_path(a: &ImpactPath, b: &ImpactPath) -> std::cmp::Ordering {
 // ---------------------------------------------------------------------------
 
 /// A domain-level request for an explainable impact answer.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnswerRequest {
     /// The target resource being evaluated for change or failure impact.
     pub target: ResourceIdentity,
@@ -181,7 +180,7 @@ impl AnswerRequest {
 /// Contains strictly factual counts and depths. Never calculates percentages,
 /// risk scores, or UI-specific labels. The target resource is never included
 /// in these counts.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ImpactSummary {
     /// Total number of impacted resources identified by [`ImpactEngine`].
     pub impacted_count: usize,
@@ -221,7 +220,7 @@ impl ImpactSummary {
 
 /// A lightweight, answer-level relationship structure linking an infrastructure
 /// edge with its derived operational state and supporting evidence IDs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnswerRelationship {
     /// The infrastructure relationship.
     pub relationship: Relationship,
@@ -266,7 +265,7 @@ impl AnswerRelationship {
 /// In both incoming and outgoing traversals, the relationship direction is strictly
 /// preserved:
 /// `relationships[i].source == resources[i]` and `relationships[i].target == resources[i+1]`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImpactPath {
     /// Sequence of resource identities along the path.
     pub resources: Vec<ResourceIdentity>,
@@ -312,7 +311,7 @@ impl ImpactPath {
 ///
 /// Exposes evidence provenance, observation type, and timestamp without duplicating
 /// arbitrary JSON payload data.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnswerEvidence {
     /// Unique identifier of the observation.
     pub id: EvidenceId,
@@ -360,7 +359,7 @@ impl AnswerEvidence {
 /// Connects a specific path, the relationships along that path, and their supporting
 /// evidence IDs. Never generates prose or templates; provides pure domain facts
 /// for downstream presentation or consumption.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplanationFact {
     /// The impact path connecting the impacted resource and target.
     pub path: ImpactPath,
@@ -390,7 +389,7 @@ impl ExplanationFact {
 // ---------------------------------------------------------------------------
 
 /// Complete, deterministic, explainable answer to an impact analysis query.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImpactAnswer {
     /// The target resource that was analyzed.
     pub target: ResourceIdentity,
@@ -437,7 +436,9 @@ impl ImpactAnswer {
 
     /// Check if a specific resource identity is present in the blast radius.
     pub fn contains(&self, resource: &ResourceIdentity) -> bool {
-        self.impacted_resources.iter().any(|r| &r.resource == resource)
+        self.impacted_resources
+            .iter()
+            .any(|r| &r.resource == resource)
     }
 
     /// Return the hop depth of a specific resource if impacted.
@@ -759,11 +760,11 @@ mod tests {
     use crate::resource::{Provider, ResourceKind};
 
     fn make_identity(name: &str) -> ResourceIdentity {
-        ResourceIdentity::new(Provider::new("kubernetes"), ResourceKind::new("service"), name)
-    }
-
-    fn make_custom_identity(provider: &str, kind: &str, id: &str) -> ResourceIdentity {
-        ResourceIdentity::new(Provider::new(provider), ResourceKind::new(kind), id)
+        ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("service"),
+            name,
+        )
     }
 
     fn make_rel(src: &str, tgt: &str, kind: RelationshipKind) -> Relationship {
@@ -808,7 +809,11 @@ mod tests {
         let target = make_identity("payments-api");
         let checkout = make_identity("checkout-service");
 
-        let rel = Relationship::new(checkout.clone(), target.clone(), RelationshipKind::DEPENDS_ON);
+        let rel = Relationship::new(
+            checkout.clone(),
+            target.clone(),
+            RelationshipKind::DEPENDS_ON,
+        );
         g.add_relationship(rel.clone());
         prov.add_relationship(rel.clone());
 
@@ -834,7 +839,10 @@ mod tests {
         assert!(ans.relationships[0].is_supported());
 
         assert_eq!(ans.paths.len(), 1);
-        assert_eq!(ans.paths[0].resources, vec![checkout.clone(), target.clone()]);
+        assert_eq!(
+            ans.paths[0].resources,
+            vec![checkout.clone(), target.clone()]
+        );
         assert_eq!(ans.paths[0].relationships, vec![rel.clone()]);
 
         assert_eq!(ans.evidence.len(), 1);
@@ -857,8 +865,16 @@ mod tests {
         let checkout = make_identity("checkout-service");
         let frontend = make_identity("frontend");
 
-        let rel1 = Relationship::new(checkout.clone(), target.clone(), RelationshipKind::DEPENDS_ON);
-        let rel2 = Relationship::new(frontend.clone(), checkout.clone(), RelationshipKind::DEPENDS_ON);
+        let rel1 = Relationship::new(
+            checkout.clone(),
+            target.clone(),
+            RelationshipKind::DEPENDS_ON,
+        );
+        let rel2 = Relationship::new(
+            frontend.clone(),
+            checkout.clone(),
+            RelationshipKind::DEPENDS_ON,
+        );
 
         g.add_relationship(rel1.clone());
         g.add_relationship(rel2.clone());
@@ -899,11 +915,6 @@ mod tests {
         let prov = ProvenanceStore::new();
 
         let target = make_identity("db");
-        let svc1 = make_identity("svc1");
-        let svc2 = make_identity("svc2");
-        let ingress1 = make_identity("ingress1");
-        let ingress2 = make_identity("ingress2");
-        let edge = make_identity("edge");
 
         // Direct (depth 1)
         g.add_relationship(make_rel("svc1", "db", RelationshipKind::DEPENDS_ON));
@@ -938,9 +949,21 @@ mod tests {
         let d2 = make_identity("d2");
         let d3 = make_identity("d3");
 
-        g.add_relationship(Relationship::new(d1.clone(), target.clone(), RelationshipKind::DEPENDS_ON));
-        g.add_relationship(Relationship::new(d2.clone(), d1.clone(), RelationshipKind::DEPENDS_ON));
-        g.add_relationship(Relationship::new(d3.clone(), d2.clone(), RelationshipKind::DEPENDS_ON));
+        g.add_relationship(Relationship::new(
+            d1.clone(),
+            target.clone(),
+            RelationshipKind::DEPENDS_ON,
+        ));
+        g.add_relationship(Relationship::new(
+            d2.clone(),
+            d1.clone(),
+            RelationshipKind::DEPENDS_ON,
+        ));
+        g.add_relationship(Relationship::new(
+            d3.clone(),
+            d2.clone(),
+            RelationshipKind::DEPENDS_ON,
+        ));
 
         // Max depth = 1
         let req1 = AnswerRequest::incoming(target.clone(), 1);
@@ -1142,8 +1165,9 @@ mod tests {
         prov.add_evidence(&rel1, shared_ev.id);
         prov.add_evidence(&rel2, shared_ev.id);
 
+        let catalog = [shared_ev.clone()];
         let req = AnswerRequest::incoming(target, 1);
-        let ans = AnswerEngine::analyze(&g, &prov, &[shared_ev.clone()], &req);
+        let ans = AnswerEngine::analyze(&g, &prov, &catalog, &req);
 
         // Even though 2 relationships share the evidence, AnswerEvidence has only 1 deduplicated entry
         assert_eq!(ans.evidence.len(), 1);
@@ -1185,8 +1209,16 @@ mod tests {
         let checkout = make_identity("checkout-service");
         let frontend = make_identity("frontend");
 
-        let rel1 = Relationship::new(checkout.clone(), payments.clone(), RelationshipKind::DEPENDS_ON);
-        let rel2 = Relationship::new(frontend.clone(), checkout.clone(), RelationshipKind::DEPENDS_ON);
+        let rel1 = Relationship::new(
+            checkout.clone(),
+            payments.clone(),
+            RelationshipKind::DEPENDS_ON,
+        );
+        let rel2 = Relationship::new(
+            frontend.clone(),
+            checkout.clone(),
+            RelationshipKind::DEPENDS_ON,
+        );
 
         g.add_relationship(rel1.clone());
         g.add_relationship(rel2.clone());
@@ -1197,7 +1229,10 @@ mod tests {
         assert_eq!(ans.paths.len(), 2);
 
         // Path 1 (hop 1): checkout -> payments
-        assert_eq!(ans.paths[0].resources, vec![checkout.clone(), payments.clone()]);
+        assert_eq!(
+            ans.paths[0].resources,
+            vec![checkout.clone(), payments.clone()]
+        );
         assert_eq!(ans.paths[0].relationships, vec![rel1.clone()]);
 
         // Path 2 (hop 2): frontend -> checkout -> payments
@@ -1253,8 +1288,12 @@ mod tests {
         let a_paths: Vec<&ImpactPath> = ans.paths_for(&a);
         assert_eq!(a_paths.len(), 2);
 
-        assert!(a_paths.iter().any(|p| p.resources == vec![a.clone(), b.clone(), d.clone()]));
-        assert!(a_paths.iter().any(|p| p.resources == vec![a.clone(), c.clone(), d.clone()]));
+        assert!(a_paths
+            .iter()
+            .any(|p| p.resources == vec![a.clone(), b.clone(), d.clone()]));
+        assert!(a_paths
+            .iter()
+            .any(|p| p.resources == vec![a.clone(), c.clone(), d.clone()]));
     }
 
     // -----------------------------------------------------------------------
@@ -1284,10 +1323,14 @@ mod tests {
 
         // BFS candidate blast radius terminates cleanly
         assert_eq!(ans.summary.impacted_count, 2); // a and b
-        // Paths must not contain cycles or infinite expansions
+                                                   // Paths must not contain cycles or infinite expansions
         for path in &ans.paths {
             let unique_nodes: HashSet<_> = path.resources.iter().collect();
-            assert_eq!(unique_nodes.len(), path.resources.len(), "path must have no duplicate nodes");
+            assert_eq!(
+                unique_nodes.len(),
+                path.resources.len(),
+                "path must have no duplicate nodes"
+            );
         }
     }
 
@@ -1569,8 +1612,16 @@ mod tests {
         let node = make_identity("node");
 
         // Non-propagating kinds
-        g.add_relationship(Relationship::new(owner, target.clone(), RelationshipKind::OWNS));
-        g.add_relationship(Relationship::new(node, target.clone(), RelationshipKind::RUNS_ON));
+        g.add_relationship(Relationship::new(
+            owner,
+            target.clone(),
+            RelationshipKind::OWNS,
+        ));
+        g.add_relationship(Relationship::new(
+            node,
+            target.clone(),
+            RelationshipKind::RUNS_ON,
+        ));
 
         let req = AnswerRequest::incoming(target.clone(), 2);
         let ans = AnswerEngine::analyze(&g, &prov, &[], &req);
@@ -1661,8 +1712,16 @@ mod tests {
         let checkout = make_identity("checkout-service");
         let frontend = make_identity("frontend");
 
-        let rel1 = Relationship::new(checkout.clone(), payments-api_target(&target), RelationshipKind::DEPENDS_ON);
-        let rel2 = Relationship::new(frontend.clone(), checkout.clone(), RelationshipKind::DEPENDS_ON);
+        let rel1 = Relationship::new(
+            checkout.clone(),
+            target.clone(),
+            RelationshipKind::DEPENDS_ON,
+        );
+        let rel2 = Relationship::new(
+            frontend.clone(),
+            checkout.clone(),
+            RelationshipKind::DEPENDS_ON,
+        );
 
         g.add_relationship(rel1.clone());
         g.add_relationship(rel2.clone());
@@ -1689,7 +1748,10 @@ mod tests {
 
         // Fact 2: frontend -> checkout -> target
         let f2 = &ans.explanation_facts[1];
-        assert_eq!(f2.path.resources, vec![frontend.clone(), checkout.clone(), target.clone()]);
+        assert_eq!(
+            f2.path.resources,
+            vec![frontend.clone(), checkout.clone(), target.clone()]
+        );
         assert_eq!(f2.relationships.len(), 2);
         assert_eq!(f2.relationships[0].relationship, rel2);
         assert_eq!(f2.relationships[1].relationship, rel1);
@@ -1701,10 +1763,6 @@ mod tests {
 
         let facts_frontend = ans.facts_for(&frontend);
         assert_eq!(facts_frontend.len(), 1); // present only in path 2
-    }
-
-    fn payments_api_target(t: &ResourceIdentity) -> ResourceIdentity {
-        t.clone()
     }
 
     // -----------------------------------------------------------------------
@@ -1719,8 +1777,16 @@ mod tests {
         let dep = make_identity("dep");
 
         // Bidirectional relationships: dep -> target and target -> dep
-        g.add_relationship(Relationship::new(dep.clone(), target.clone(), RelationshipKind::DEPENDS_ON));
-        g.add_relationship(Relationship::new(target.clone(), dep.clone(), RelationshipKind::DEPENDS_ON));
+        g.add_relationship(Relationship::new(
+            dep.clone(),
+            target.clone(),
+            RelationshipKind::DEPENDS_ON,
+        ));
+        g.add_relationship(Relationship::new(
+            target.clone(),
+            dep.clone(),
+            RelationshipKind::DEPENDS_ON,
+        ));
 
         let req = AnswerRequest::incoming(target.clone(), 2);
         let ans = AnswerEngine::analyze(&g, &prov, &[], &req);
