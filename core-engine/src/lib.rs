@@ -14,10 +14,12 @@
 //! - [`traversal`]: Deterministic, in-memory graph traversal layer.
 //! - [`impact`]: Deterministic, in-memory candidate blast radius / impact analysis engine.
 //! - [`provenance`]: In-memory relationship provenance / evidence association store.
+//! - [`history`]: Relationship observation history and current-state derivation.
 
 pub mod discovery;
 pub mod evidence;
 pub mod graph;
+pub mod history;
 pub mod impact;
 pub mod provenance;
 pub mod relationship;
@@ -29,6 +31,9 @@ pub use discovery::{
 };
 pub use evidence::{CollectorId, Evidence, EvidenceId, EvidenceSource, ObservationType};
 pub use graph::Graph;
+pub use history::{
+    RelationshipHistory, RelationshipObservation, RelationshipState, RelationshipStateDerivation,
+};
 pub use impact::{propagates_impact, ImpactEngine, ImpactRequest, ImpactResult, ImpactedResource};
 pub use provenance::{ProvenanceStore, RelationshipEvidence};
 pub use relationship::{Relationship, RelationshipCategory, RelationshipKind};
