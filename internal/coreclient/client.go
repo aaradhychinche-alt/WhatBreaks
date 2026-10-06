@@ -20,10 +20,11 @@ import (
 // DefaultAddress is the default host:port address of the WhatBreaks Core Engine gRPC server.
 const DefaultAddress = "127.0.0.1:50051"
 
-// Client wraps the generated DiscoveryServiceClient and its underlying gRPC connection.
+// Client wraps the generated DiscoveryServiceClient and AnswerServiceClient and their underlying gRPC connection.
 type Client struct {
-	conn   *grpc.ClientConn
-	client corev1.DiscoveryServiceClient
+	conn         *grpc.ClientConn
+	client       corev1.DiscoveryServiceClient
+	answerClient corev1.AnswerServiceClient
 }
 
 // Connect establishes a gRPC connection to the WhatBreaks Core Engine server.
@@ -46,16 +47,18 @@ func Connect(ctx context.Context, target string, opts ...grpc.DialOption) (*Clie
 	}
 
 	return &Client{
-		conn:   conn,
-		client: corev1.NewDiscoveryServiceClient(conn),
+		conn:         conn,
+		client:       corev1.NewDiscoveryServiceClient(conn),
+		answerClient: corev1.NewAnswerServiceClient(conn),
 	}, nil
 }
 
 // NewFromConn constructs a Client using an existing *grpc.ClientConn.
 func NewFromConn(conn *grpc.ClientConn) *Client {
 	return &Client{
-		conn:   conn,
-		client: corev1.NewDiscoveryServiceClient(conn),
+		conn:         conn,
+		client:       corev1.NewDiscoveryServiceClient(conn),
+		answerClient: corev1.NewAnswerServiceClient(conn),
 	}
 }
 
@@ -85,6 +88,24 @@ func (c *Client) Conn() *grpc.ClientConn {
 // DiscoveryServiceClient returns the raw generated DiscoveryServiceClient interface.
 func (c *Client) DiscoveryServiceClient() corev1.DiscoveryServiceClient {
 	return c.client
+}
+
+// AnalyzeImpact sends an AnalyzeImpactRequest to the Rust Core Engine AnswerService.
+// It returns the AnalyzeImpactResponse or the gRPC status error without modifying status codes.
+func (c *Client) AnalyzeImpact(ctx context.Context, req *corev1.AnalyzeImpactRequest, opts ...grpc.CallOption) (*corev1.AnalyzeImpactResponse, error) {
+	if c == nil || c.answerClient == nil {
+		return nil, status.Error(codes.FailedPrecondition, "client is not connected")
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request cannot be nil")
+	}
+
+	return c.answerClient.AnalyzeImpact(ctx, req, opts...)
+}
+
+// AnswerServiceClient returns the raw generated AnswerServiceClient interface.
+func (c *Client) AnswerServiceClient() corev1.AnswerServiceClient {
+	return c.answerClient
 }
 
 // Close closes the underlying gRPC connection.

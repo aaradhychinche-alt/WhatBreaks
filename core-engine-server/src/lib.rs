@@ -10,9 +10,11 @@
 //! - Protobuf definitions and gRPC service traits live exclusively in `wb-core-proto`.
 //! - This crate handles validation, serialization, deserialization, and gRPC status mapping.
 
+#![allow(clippy::result_large_err)]
+
 pub mod convert;
 pub mod server;
 pub mod service;
 
-pub use server::{create_service, run_server};
-pub use service::DiscoveryServiceImpl;
+pub use server::{create_answer_service, create_service, run_server};
+pub use service::{AnswerServiceImpl, DiscoveryServiceImpl};

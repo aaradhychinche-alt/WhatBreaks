@@ -214,3 +214,85 @@ message RunDiscoveryRequest {
 message RunDiscoveryResponse {
   repeated DiscoveryResult results = 1;
 }
+
+// ---------------------------------------------------------------------------
+// Answer Engine Messages
+//
+// Structured, explainable facts produced by the Rust Answer Engine.
+// ---------------------------------------------------------------------------
+
+// A request to compute the candidate blast radius and structured explanation.
+message AnalyzeImpactRequest {
+  // Target resource to evaluate for change or failure impact.
+  ResourceIdentity target = 1;
+
+  // Traversal direction: "incoming" (upstream dependents) or "outgoing" (downstream dependencies).
+  string direction = 2;
+
+  // Maximum hop depth to explore (must be >= 1).
+  uint32 max_depth = 3;
+}
+
+// Deterministic aggregate facts summarizing the candidate blast radius.
+message ImpactSummary {
+  uint32 impacted_count = 1;
+  uint32 direct_count = 2;
+  uint32 indirect_count = 3;
+  uint32 max_depth = 4;
+}
+
+// A resource identified as a candidate for being affected by a change/failure.
+message ImpactedResource {
+  ResourceIdentity resource = 1;
+  uint32 depth = 2;
+}
+
+// An infrastructure relationship with its derived operational state and supporting evidence IDs.
+message AnswerRelationship {
+  Relationship relationship = 1;
+  string state = 2; // "Supported" or "Unknown"
+  repeated string evidence_ids = 3; // UUIDv4 strings
+}
+
+// A deterministic sequence of resources and directional relationships.
+message ImpactPath {
+  repeated ResourceIdentity resources = 1;
+  repeated Relationship relationships = 2;
+}
+
+// Lightweight factual evidence metadata supporting relationships in the answer.
+message AnswerEvidence {
+  string id = 1; // UUIDv4 string
+  EvidenceSource source = 2;
+  string observed_at = 3; // RFC 3339 UTC string
+  string observation_type = 4;
+}
+
+// Structured, factual explanation of why a resource is considered impacted.
+message ExplanationFact {
+  ImpactPath path = 1;
+  repeated AnswerRelationship relationships = 2;
+  repeated string evidence_ids = 3; // UUIDv4 strings
+}
+
+// Response from AnswerEngine containing structured, explainable impact facts.
+message AnalyzeImpactResponse {
+  ResourceIdentity target = 1;
+  ImpactSummary summary = 2;
+  repeated ImpactedResource impacted_resources = 3;
+  repeated AnswerRelationship relationships = 4;
+  repeated ImpactPath paths = 5;
+  repeated AnswerEvidence evidence = 6;
+  repeated ExplanationFact explanation_facts = 7;
+}
+
+// ---------------------------------------------------------------------------
+// AnswerService
+//
+// The service providing deterministic, explainable impact analysis.
+// ---------------------------------------------------------------------------
+service AnswerService {
+  // Analyze candidate blast radius and return structured, explainable facts.
+  rpc AnalyzeImpact(AnalyzeImpactRequest) returns (AnalyzeImpactResponse);
+}
+

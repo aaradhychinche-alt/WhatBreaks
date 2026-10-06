@@ -797,6 +797,529 @@ func (x *RunDiscoveryResponse) GetResults() []*DiscoveryResult {
 	return nil
 }
 
+// A request to compute the candidate blast radius and structured explanation.
+type AnalyzeImpactRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Target resource to evaluate for change or failure impact.
+	Target *ResourceIdentity `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
+	// Traversal direction: "incoming" (upstream dependents) or "outgoing" (downstream dependencies).
+	Direction string `protobuf:"bytes,2,opt,name=direction,proto3" json:"direction,omitempty"`
+	// Maximum hop depth to explore (must be >= 1).
+	MaxDepth      uint32 `protobuf:"varint,3,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AnalyzeImpactRequest) Reset() {
+	*x = AnalyzeImpactRequest{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnalyzeImpactRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnalyzeImpactRequest) ProtoMessage() {}
+
+func (x *AnalyzeImpactRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnalyzeImpactRequest.ProtoReflect.Descriptor instead.
+func (*AnalyzeImpactRequest) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *AnalyzeImpactRequest) GetTarget() *ResourceIdentity {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
+func (x *AnalyzeImpactRequest) GetDirection() string {
+	if x != nil {
+		return x.Direction
+	}
+	return ""
+}
+
+func (x *AnalyzeImpactRequest) GetMaxDepth() uint32 {
+	if x != nil {
+		return x.MaxDepth
+	}
+	return 0
+}
+
+// Deterministic aggregate facts summarizing the candidate blast radius.
+type ImpactSummary struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ImpactedCount uint32                 `protobuf:"varint,1,opt,name=impacted_count,json=impactedCount,proto3" json:"impacted_count,omitempty"`
+	DirectCount   uint32                 `protobuf:"varint,2,opt,name=direct_count,json=directCount,proto3" json:"direct_count,omitempty"`
+	IndirectCount uint32                 `protobuf:"varint,3,opt,name=indirect_count,json=indirectCount,proto3" json:"indirect_count,omitempty"`
+	MaxDepth      uint32                 `protobuf:"varint,4,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImpactSummary) Reset() {
+	*x = ImpactSummary{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImpactSummary) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImpactSummary) ProtoMessage() {}
+
+func (x *ImpactSummary) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImpactSummary.ProtoReflect.Descriptor instead.
+func (*ImpactSummary) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ImpactSummary) GetImpactedCount() uint32 {
+	if x != nil {
+		return x.ImpactedCount
+	}
+	return 0
+}
+
+func (x *ImpactSummary) GetDirectCount() uint32 {
+	if x != nil {
+		return x.DirectCount
+	}
+	return 0
+}
+
+func (x *ImpactSummary) GetIndirectCount() uint32 {
+	if x != nil {
+		return x.IndirectCount
+	}
+	return 0
+}
+
+func (x *ImpactSummary) GetMaxDepth() uint32 {
+	if x != nil {
+		return x.MaxDepth
+	}
+	return 0
+}
+
+// A resource identified as a candidate for being affected by a change/failure.
+type ImpactedResource struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Resource      *ResourceIdentity      `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
+	Depth         uint32                 `protobuf:"varint,2,opt,name=depth,proto3" json:"depth,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImpactedResource) Reset() {
+	*x = ImpactedResource{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImpactedResource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImpactedResource) ProtoMessage() {}
+
+func (x *ImpactedResource) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImpactedResource.ProtoReflect.Descriptor instead.
+func (*ImpactedResource) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ImpactedResource) GetResource() *ResourceIdentity {
+	if x != nil {
+		return x.Resource
+	}
+	return nil
+}
+
+func (x *ImpactedResource) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
+// An infrastructure relationship with its derived operational state and supporting evidence IDs.
+type AnswerRelationship struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Relationship  *Relationship          `protobuf:"bytes,1,opt,name=relationship,proto3" json:"relationship,omitempty"`
+	State         string                 `protobuf:"bytes,2,opt,name=state,proto3" json:"state,omitempty"`                                // "Supported" or "Unknown"
+	EvidenceIds   []string               `protobuf:"bytes,3,rep,name=evidence_ids,json=evidenceIds,proto3" json:"evidence_ids,omitempty"` // UUIDv4 strings
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AnswerRelationship) Reset() {
+	*x = AnswerRelationship{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnswerRelationship) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnswerRelationship) ProtoMessage() {}
+
+func (x *AnswerRelationship) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnswerRelationship.ProtoReflect.Descriptor instead.
+func (*AnswerRelationship) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *AnswerRelationship) GetRelationship() *Relationship {
+	if x != nil {
+		return x.Relationship
+	}
+	return nil
+}
+
+func (x *AnswerRelationship) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *AnswerRelationship) GetEvidenceIds() []string {
+	if x != nil {
+		return x.EvidenceIds
+	}
+	return nil
+}
+
+// A deterministic sequence of resources and directional relationships.
+type ImpactPath struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Resources     []*ResourceIdentity    `protobuf:"bytes,1,rep,name=resources,proto3" json:"resources,omitempty"`
+	Relationships []*Relationship        `protobuf:"bytes,2,rep,name=relationships,proto3" json:"relationships,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ImpactPath) Reset() {
+	*x = ImpactPath{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ImpactPath) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImpactPath) ProtoMessage() {}
+
+func (x *ImpactPath) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImpactPath.ProtoReflect.Descriptor instead.
+func (*ImpactPath) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ImpactPath) GetResources() []*ResourceIdentity {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+func (x *ImpactPath) GetRelationships() []*Relationship {
+	if x != nil {
+		return x.Relationships
+	}
+	return nil
+}
+
+// Lightweight factual evidence metadata supporting relationships in the answer.
+type AnswerEvidence struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Id              string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // UUIDv4 string
+	Source          *EvidenceSource        `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
+	ObservedAt      string                 `protobuf:"bytes,3,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"` // RFC 3339 UTC string
+	ObservationType string                 `protobuf:"bytes,4,opt,name=observation_type,json=observationType,proto3" json:"observation_type,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *AnswerEvidence) Reset() {
+	*x = AnswerEvidence{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnswerEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnswerEvidence) ProtoMessage() {}
+
+func (x *AnswerEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnswerEvidence.ProtoReflect.Descriptor instead.
+func (*AnswerEvidence) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *AnswerEvidence) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *AnswerEvidence) GetSource() *EvidenceSource {
+	if x != nil {
+		return x.Source
+	}
+	return nil
+}
+
+func (x *AnswerEvidence) GetObservedAt() string {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return ""
+}
+
+func (x *AnswerEvidence) GetObservationType() string {
+	if x != nil {
+		return x.ObservationType
+	}
+	return ""
+}
+
+// Structured, factual explanation of why a resource is considered impacted.
+type ExplanationFact struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          *ImpactPath            `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Relationships []*AnswerRelationship  `protobuf:"bytes,2,rep,name=relationships,proto3" json:"relationships,omitempty"`
+	EvidenceIds   []string               `protobuf:"bytes,3,rep,name=evidence_ids,json=evidenceIds,proto3" json:"evidence_ids,omitempty"` // UUIDv4 strings
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExplanationFact) Reset() {
+	*x = ExplanationFact{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExplanationFact) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExplanationFact) ProtoMessage() {}
+
+func (x *ExplanationFact) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExplanationFact.ProtoReflect.Descriptor instead.
+func (*ExplanationFact) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ExplanationFact) GetPath() *ImpactPath {
+	if x != nil {
+		return x.Path
+	}
+	return nil
+}
+
+func (x *ExplanationFact) GetRelationships() []*AnswerRelationship {
+	if x != nil {
+		return x.Relationships
+	}
+	return nil
+}
+
+func (x *ExplanationFact) GetEvidenceIds() []string {
+	if x != nil {
+		return x.EvidenceIds
+	}
+	return nil
+}
+
+// Response from AnswerEngine containing structured, explainable impact facts.
+type AnalyzeImpactResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Target            *ResourceIdentity      `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
+	Summary           *ImpactSummary         `protobuf:"bytes,2,opt,name=summary,proto3" json:"summary,omitempty"`
+	ImpactedResources []*ImpactedResource    `protobuf:"bytes,3,rep,name=impacted_resources,json=impactedResources,proto3" json:"impacted_resources,omitempty"`
+	Relationships     []*AnswerRelationship  `protobuf:"bytes,4,rep,name=relationships,proto3" json:"relationships,omitempty"`
+	Paths             []*ImpactPath          `protobuf:"bytes,5,rep,name=paths,proto3" json:"paths,omitempty"`
+	Evidence          []*AnswerEvidence      `protobuf:"bytes,6,rep,name=evidence,proto3" json:"evidence,omitempty"`
+	ExplanationFacts  []*ExplanationFact     `protobuf:"bytes,7,rep,name=explanation_facts,json=explanationFacts,proto3" json:"explanation_facts,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *AnalyzeImpactResponse) Reset() {
+	*x = AnalyzeImpactResponse{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AnalyzeImpactResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AnalyzeImpactResponse) ProtoMessage() {}
+
+func (x *AnalyzeImpactResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AnalyzeImpactResponse.ProtoReflect.Descriptor instead.
+func (*AnalyzeImpactResponse) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *AnalyzeImpactResponse) GetTarget() *ResourceIdentity {
+	if x != nil {
+		return x.Target
+	}
+	return nil
+}
+
+func (x *AnalyzeImpactResponse) GetSummary() *ImpactSummary {
+	if x != nil {
+		return x.Summary
+	}
+	return nil
+}
+
+func (x *AnalyzeImpactResponse) GetImpactedResources() []*ImpactedResource {
+	if x != nil {
+		return x.ImpactedResources
+	}
+	return nil
+}
+
+func (x *AnalyzeImpactResponse) GetRelationships() []*AnswerRelationship {
+	if x != nil {
+		return x.Relationships
+	}
+	return nil
+}
+
+func (x *AnalyzeImpactResponse) GetPaths() []*ImpactPath {
+	if x != nil {
+		return x.Paths
+	}
+	return nil
+}
+
+func (x *AnalyzeImpactResponse) GetEvidence() []*AnswerEvidence {
+	if x != nil {
+		return x.Evidence
+	}
+	return nil
+}
+
+func (x *AnalyzeImpactResponse) GetExplanationFacts() []*ExplanationFact {
+	if x != nil {
+		return x.ExplanationFacts
+	}
+	return nil
+}
+
 var File_wb_core_v1_core_proto protoreflect.FileDescriptor
 
 const file_wb_core_v1_core_proto_rawDesc = "" +
@@ -843,9 +1366,49 @@ const file_wb_core_v1_core_proto_rawDesc = "" +
 	"\x13RunDiscoveryRequest\x120\n" +
 	"\bevidence\x18\x01 \x03(\v2\x14.wb.core.v1.EvidenceR\bevidence\"M\n" +
 	"\x14RunDiscoveryResponse\x125\n" +
-	"\aresults\x18\x01 \x03(\v2\x1b.wb.core.v1.DiscoveryResultR\aresults2e\n" +
+	"\aresults\x18\x01 \x03(\v2\x1b.wb.core.v1.DiscoveryResultR\aresults\"\x87\x01\n" +
+	"\x14AnalyzeImpactRequest\x124\n" +
+	"\x06target\x18\x01 \x01(\v2\x1c.wb.core.v1.ResourceIdentityR\x06target\x12\x1c\n" +
+	"\tdirection\x18\x02 \x01(\tR\tdirection\x12\x1b\n" +
+	"\tmax_depth\x18\x03 \x01(\rR\bmaxDepth\"\x9d\x01\n" +
+	"\rImpactSummary\x12%\n" +
+	"\x0eimpacted_count\x18\x01 \x01(\rR\rimpactedCount\x12!\n" +
+	"\fdirect_count\x18\x02 \x01(\rR\vdirectCount\x12%\n" +
+	"\x0eindirect_count\x18\x03 \x01(\rR\rindirectCount\x12\x1b\n" +
+	"\tmax_depth\x18\x04 \x01(\rR\bmaxDepth\"b\n" +
+	"\x10ImpactedResource\x128\n" +
+	"\bresource\x18\x01 \x01(\v2\x1c.wb.core.v1.ResourceIdentityR\bresource\x12\x14\n" +
+	"\x05depth\x18\x02 \x01(\rR\x05depth\"\x8b\x01\n" +
+	"\x12AnswerRelationship\x12<\n" +
+	"\frelationship\x18\x01 \x01(\v2\x18.wb.core.v1.RelationshipR\frelationship\x12\x14\n" +
+	"\x05state\x18\x02 \x01(\tR\x05state\x12!\n" +
+	"\fevidence_ids\x18\x03 \x03(\tR\vevidenceIds\"\x88\x01\n" +
+	"\n" +
+	"ImpactPath\x12:\n" +
+	"\tresources\x18\x01 \x03(\v2\x1c.wb.core.v1.ResourceIdentityR\tresources\x12>\n" +
+	"\rrelationships\x18\x02 \x03(\v2\x18.wb.core.v1.RelationshipR\rrelationships\"\xa0\x01\n" +
+	"\x0eAnswerEvidence\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x122\n" +
+	"\x06source\x18\x02 \x01(\v2\x1a.wb.core.v1.EvidenceSourceR\x06source\x12\x1f\n" +
+	"\vobserved_at\x18\x03 \x01(\tR\n" +
+	"observedAt\x12)\n" +
+	"\x10observation_type\x18\x04 \x01(\tR\x0fobservationType\"\xa6\x01\n" +
+	"\x0fExplanationFact\x12*\n" +
+	"\x04path\x18\x01 \x01(\v2\x16.wb.core.v1.ImpactPathR\x04path\x12D\n" +
+	"\rrelationships\x18\x02 \x03(\v2\x1e.wb.core.v1.AnswerRelationshipR\rrelationships\x12!\n" +
+	"\fevidence_ids\x18\x03 \x03(\tR\vevidenceIds\"\xc5\x03\n" +
+	"\x15AnalyzeImpactResponse\x124\n" +
+	"\x06target\x18\x01 \x01(\v2\x1c.wb.core.v1.ResourceIdentityR\x06target\x123\n" +
+	"\asummary\x18\x02 \x01(\v2\x19.wb.core.v1.ImpactSummaryR\asummary\x12K\n" +
+	"\x12impacted_resources\x18\x03 \x03(\v2\x1c.wb.core.v1.ImpactedResourceR\x11impactedResources\x12D\n" +
+	"\rrelationships\x18\x04 \x03(\v2\x1e.wb.core.v1.AnswerRelationshipR\rrelationships\x12,\n" +
+	"\x05paths\x18\x05 \x03(\v2\x16.wb.core.v1.ImpactPathR\x05paths\x126\n" +
+	"\bevidence\x18\x06 \x03(\v2\x1a.wb.core.v1.AnswerEvidenceR\bevidence\x12H\n" +
+	"\x11explanation_facts\x18\a \x03(\v2\x1b.wb.core.v1.ExplanationFactR\x10explanationFacts2e\n" +
 	"\x10DiscoveryService\x12Q\n" +
-	"\fRunDiscovery\x12\x1f.wb.core.v1.RunDiscoveryRequest\x1a .wb.core.v1.RunDiscoveryResponseBCZAgithub.com/aaradhychinche-alt/WhatBreaks/gen/go/wb/core/v1;corev1b\x06proto3"
+	"\fRunDiscovery\x12\x1f.wb.core.v1.RunDiscoveryRequest\x1a .wb.core.v1.RunDiscoveryResponse2e\n" +
+	"\rAnswerService\x12T\n" +
+	"\rAnalyzeImpact\x12 .wb.core.v1.AnalyzeImpactRequest\x1a!.wb.core.v1.AnalyzeImpactResponseBCZAgithub.com/aaradhychinche-alt/WhatBreaks/gen/go/wb/core/v1;corev1b\x06proto3"
 
 var (
 	file_wb_core_v1_core_proto_rawDescOnce sync.Once
@@ -859,7 +1422,7 @@ func file_wb_core_v1_core_proto_rawDescGZIP() []byte {
 	return file_wb_core_v1_core_proto_rawDescData
 }
 
-var file_wb_core_v1_core_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_wb_core_v1_core_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_wb_core_v1_core_proto_goTypes = []any{
 	(*ResourceIdentity)(nil),       // 0: wb.core.v1.ResourceIdentity
 	(*EvidenceSource)(nil),         // 1: wb.core.v1.EvidenceSource
@@ -872,6 +1435,14 @@ var file_wb_core_v1_core_proto_goTypes = []any{
 	(*Invalid)(nil),                // 8: wb.core.v1.Invalid
 	(*RunDiscoveryRequest)(nil),    // 9: wb.core.v1.RunDiscoveryRequest
 	(*RunDiscoveryResponse)(nil),   // 10: wb.core.v1.RunDiscoveryResponse
+	(*AnalyzeImpactRequest)(nil),   // 11: wb.core.v1.AnalyzeImpactRequest
+	(*ImpactSummary)(nil),          // 12: wb.core.v1.ImpactSummary
+	(*ImpactedResource)(nil),       // 13: wb.core.v1.ImpactedResource
+	(*AnswerRelationship)(nil),     // 14: wb.core.v1.AnswerRelationship
+	(*ImpactPath)(nil),             // 15: wb.core.v1.ImpactPath
+	(*AnswerEvidence)(nil),         // 16: wb.core.v1.AnswerEvidence
+	(*ExplanationFact)(nil),        // 17: wb.core.v1.ExplanationFact
+	(*AnalyzeImpactResponse)(nil),  // 18: wb.core.v1.AnalyzeImpactResponse
 }
 var file_wb_core_v1_core_proto_depIdxs = []int32{
 	1,  // 0: wb.core.v1.Evidence.source:type_name -> wb.core.v1.EvidenceSource
@@ -885,13 +1456,30 @@ var file_wb_core_v1_core_proto_depIdxs = []int32{
 	8,  // 8: wb.core.v1.DiscoveryResult.invalid:type_name -> wb.core.v1.Invalid
 	2,  // 9: wb.core.v1.RunDiscoveryRequest.evidence:type_name -> wb.core.v1.Evidence
 	5,  // 10: wb.core.v1.RunDiscoveryResponse.results:type_name -> wb.core.v1.DiscoveryResult
-	9,  // 11: wb.core.v1.DiscoveryService.RunDiscovery:input_type -> wb.core.v1.RunDiscoveryRequest
-	10, // 12: wb.core.v1.DiscoveryService.RunDiscovery:output_type -> wb.core.v1.RunDiscoveryResponse
-	12, // [12:13] is the sub-list for method output_type
-	11, // [11:12] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	0,  // 11: wb.core.v1.AnalyzeImpactRequest.target:type_name -> wb.core.v1.ResourceIdentity
+	0,  // 12: wb.core.v1.ImpactedResource.resource:type_name -> wb.core.v1.ResourceIdentity
+	3,  // 13: wb.core.v1.AnswerRelationship.relationship:type_name -> wb.core.v1.Relationship
+	0,  // 14: wb.core.v1.ImpactPath.resources:type_name -> wb.core.v1.ResourceIdentity
+	3,  // 15: wb.core.v1.ImpactPath.relationships:type_name -> wb.core.v1.Relationship
+	1,  // 16: wb.core.v1.AnswerEvidence.source:type_name -> wb.core.v1.EvidenceSource
+	15, // 17: wb.core.v1.ExplanationFact.path:type_name -> wb.core.v1.ImpactPath
+	14, // 18: wb.core.v1.ExplanationFact.relationships:type_name -> wb.core.v1.AnswerRelationship
+	0,  // 19: wb.core.v1.AnalyzeImpactResponse.target:type_name -> wb.core.v1.ResourceIdentity
+	12, // 20: wb.core.v1.AnalyzeImpactResponse.summary:type_name -> wb.core.v1.ImpactSummary
+	13, // 21: wb.core.v1.AnalyzeImpactResponse.impacted_resources:type_name -> wb.core.v1.ImpactedResource
+	14, // 22: wb.core.v1.AnalyzeImpactResponse.relationships:type_name -> wb.core.v1.AnswerRelationship
+	15, // 23: wb.core.v1.AnalyzeImpactResponse.paths:type_name -> wb.core.v1.ImpactPath
+	16, // 24: wb.core.v1.AnalyzeImpactResponse.evidence:type_name -> wb.core.v1.AnswerEvidence
+	17, // 25: wb.core.v1.AnalyzeImpactResponse.explanation_facts:type_name -> wb.core.v1.ExplanationFact
+	9,  // 26: wb.core.v1.DiscoveryService.RunDiscovery:input_type -> wb.core.v1.RunDiscoveryRequest
+	11, // 27: wb.core.v1.AnswerService.AnalyzeImpact:input_type -> wb.core.v1.AnalyzeImpactRequest
+	10, // 28: wb.core.v1.DiscoveryService.RunDiscovery:output_type -> wb.core.v1.RunDiscoveryResponse
+	18, // 29: wb.core.v1.AnswerService.AnalyzeImpact:output_type -> wb.core.v1.AnalyzeImpactResponse
+	28, // [28:30] is the sub-list for method output_type
+	26, // [26:28] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_wb_core_v1_core_proto_init() }
@@ -911,9 +1499,9 @@ func file_wb_core_v1_core_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wb_core_v1_core_proto_rawDesc), len(file_wb_core_v1_core_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   11,
+			NumMessages:   19,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_wb_core_v1_core_proto_goTypes,
 		DependencyIndexes: file_wb_core_v1_core_proto_depIdxs,

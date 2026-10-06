@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -53,6 +54,7 @@ type Config struct {
 	SpeedLimitWindow  time.Duration
 	SpeedLimitDelayAt int
 	SpeedLimitDelayMs time.Duration
+	ImpactHandler     http.Handler
 }
 
 // DefaultConfig returns an API Config populated with default settings.

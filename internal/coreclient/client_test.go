@@ -490,8 +490,57 @@ func TestClient_AccessorsAndClose(t *testing.T) {
 	if client.DiscoveryServiceClient() == nil {
 		t.Error("expected non-nil DiscoveryServiceClient interface")
 	}
+	if client.AnswerServiceClient() == nil {
+		t.Error("expected non-nil AnswerServiceClient interface")
+	}
 
 	if err := client.Close(); err != nil {
 		t.Errorf("unexpected error on client.Close(): %v", err)
+	}
+}
+
+func TestClient_AnalyzeImpact_NilRequest(t *testing.T) {
+	client, _ := startRustServer(t)
+
+	ctx := context.Background()
+	_, err := client.AnalyzeImpact(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error for nil request")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument for nil request, got %v", err)
+	}
+}
+
+func TestClient_AnalyzeImpact_EmptyGraphSuccess(t *testing.T) {
+	client, _ := startRustServer(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req := &corev1.AnalyzeImpactRequest{
+		Target:    podSubject("payments-api"),
+		Direction: "incoming",
+		MaxDepth:  5,
+	}
+
+	resp, err := client.AnalyzeImpact(ctx, req)
+	if err != nil {
+		t.Fatalf("AnalyzeImpact failed: %v", err)
+	}
+
+	if resp.GetTarget() == nil {
+		t.Fatal("expected non-nil target in response")
+	}
+	if resp.GetTarget().GetProviderId() != "payments/payments-api" {
+		t.Errorf("expected target payments/payments-api, got %s", resp.GetTarget().GetProviderId())
+	}
+	if resp.GetSummary() == nil {
+		t.Fatal("expected non-nil summary in response")
+	}
+	if resp.GetSummary().GetImpactedCount() != 0 {
+		t.Errorf("expected 0 impacted, got %d", resp.GetSummary().GetImpactedCount())
 	}
 }

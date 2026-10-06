@@ -154,3 +154,119 @@ var DiscoveryService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "wb/core/v1/core.proto",
 }
+
+const (
+	AnswerService_AnalyzeImpact_FullMethodName = "/wb.core.v1.AnswerService/AnalyzeImpact"
+)
+
+// AnswerServiceClient is the client API for AnswerService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ---------------------------------------------------------------------------
+// AnswerService
+//
+// The service providing deterministic, explainable impact analysis.
+// ---------------------------------------------------------------------------
+type AnswerServiceClient interface {
+	// Analyze candidate blast radius and return structured, explainable facts.
+	AnalyzeImpact(ctx context.Context, in *AnalyzeImpactRequest, opts ...grpc.CallOption) (*AnalyzeImpactResponse, error)
+}
+
+type answerServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewAnswerServiceClient(cc grpc.ClientConnInterface) AnswerServiceClient {
+	return &answerServiceClient{cc}
+}
+
+func (c *answerServiceClient) AnalyzeImpact(ctx context.Context, in *AnalyzeImpactRequest, opts ...grpc.CallOption) (*AnalyzeImpactResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AnalyzeImpactResponse)
+	err := c.cc.Invoke(ctx, AnswerService_AnalyzeImpact_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AnswerServiceServer is the server API for AnswerService service.
+// All implementations must embed UnimplementedAnswerServiceServer
+// for forward compatibility.
+//
+// ---------------------------------------------------------------------------
+// AnswerService
+//
+// The service providing deterministic, explainable impact analysis.
+// ---------------------------------------------------------------------------
+type AnswerServiceServer interface {
+	// Analyze candidate blast radius and return structured, explainable facts.
+	AnalyzeImpact(context.Context, *AnalyzeImpactRequest) (*AnalyzeImpactResponse, error)
+	mustEmbedUnimplementedAnswerServiceServer()
+}
+
+// UnimplementedAnswerServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedAnswerServiceServer struct{}
+
+func (UnimplementedAnswerServiceServer) AnalyzeImpact(context.Context, *AnalyzeImpactRequest) (*AnalyzeImpactResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AnalyzeImpact not implemented")
+}
+func (UnimplementedAnswerServiceServer) mustEmbedUnimplementedAnswerServiceServer() {}
+func (UnimplementedAnswerServiceServer) testEmbeddedByValue()                       {}
+
+// UnsafeAnswerServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AnswerServiceServer will
+// result in compilation errors.
+type UnsafeAnswerServiceServer interface {
+	mustEmbedUnimplementedAnswerServiceServer()
+}
+
+func RegisterAnswerServiceServer(s grpc.ServiceRegistrar, srv AnswerServiceServer) {
+	// If the following call panics, it indicates UnimplementedAnswerServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&AnswerService_ServiceDesc, srv)
+}
+
+func _AnswerService_AnalyzeImpact_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AnalyzeImpactRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AnswerServiceServer).AnalyzeImpact(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AnswerService_AnalyzeImpact_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AnswerServiceServer).AnalyzeImpact(ctx, req.(*AnalyzeImpactRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// AnswerService_ServiceDesc is the grpc.ServiceDesc for AnswerService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var AnswerService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "wb.core.v1.AnswerService",
+	HandlerType: (*AnswerServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "AnalyzeImpact",
+			Handler:    _AnswerService_AnalyzeImpact_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "wb/core/v1/core.proto",
+}

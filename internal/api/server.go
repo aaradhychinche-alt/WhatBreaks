@@ -68,7 +68,12 @@ func (s *Server) setupRoutes() {
 	// 2. CSRF token generation route
 	s.mux.Handle("GET /api/csrf-token", s.csrfManager.TokenHandler())
 
-	// 3. Fallback 404 handler matching Express lines 109-114
+	// 3. Impact analysis endpoint (if configured)
+	if s.cfg.ImpactHandler != nil {
+		s.mux.Handle("POST /api/v1/impact", s.cfg.ImpactHandler)
+	}
+
+	// 4. Fallback 404 handler matching Express lines 109-114
 	s.mux.Handle("/", NotFoundHandler())
 }
 

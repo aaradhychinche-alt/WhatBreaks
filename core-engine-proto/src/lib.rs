@@ -32,6 +32,7 @@
 /// Do not edit the generated code directly — edit the `.proto` file instead.
 pub mod wb {
     pub mod core {
+        #[allow(clippy::all)]
         pub mod v1 {
             // tonic-build output is placed here at build time.
             tonic::include_proto!("wb.core.v1");

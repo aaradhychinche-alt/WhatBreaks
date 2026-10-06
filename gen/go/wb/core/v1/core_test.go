@@ -201,6 +201,7 @@ func TestRunDiscoveryRequestResponse(t *testing.T) {
 // Compile-time interface checks for gRPC client and server stubs
 var (
 	_ corev1.DiscoveryServiceServer = (*corev1.UnimplementedDiscoveryServiceServer)(nil)
+	_ corev1.AnswerServiceServer    = (*corev1.UnimplementedAnswerServiceServer)(nil)
 )
 
 func TestDiscoveryServiceClientInterface(t *testing.T) {
@@ -210,3 +211,9 @@ func TestDiscoveryServiceClientInterface(t *testing.T) {
 	}
 }
 
+func TestAnswerServiceClientInterface(t *testing.T) {
+	var client corev1.AnswerServiceClient = corev1.NewAnswerServiceClient(nil)
+	if client == nil {
+		t.Fatal("expected non-nil client wrapper")
+	}
+}
