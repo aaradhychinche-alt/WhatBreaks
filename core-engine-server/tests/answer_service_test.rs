@@ -42,6 +42,7 @@ async fn test_rpc_empty_target() {
         target: None,
         direction: "incoming".to_string(),
         max_depth: 3,
+        workspace_id: "".to_string(),
     });
     let err = svc.analyze_impact(req).await.unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
@@ -59,6 +60,7 @@ async fn test_rpc_empty_resource_identity_field() {
         }),
         direction: "incoming".to_string(),
         max_depth: 3,
+        workspace_id: "".to_string(),
     });
     let err = svc.analyze_impact(req).await.unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
@@ -72,6 +74,7 @@ async fn test_rpc_invalid_direction() {
         target: Some(proto_identity("kubernetes", "service", "api")),
         direction: "sideways".to_string(),
         max_depth: 3,
+        workspace_id: "".to_string(),
     });
     let err = svc.analyze_impact(req).await.unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
@@ -85,6 +88,7 @@ async fn test_rpc_zero_max_depth() {
         target: Some(proto_identity("kubernetes", "service", "api")),
         direction: "incoming".to_string(),
         max_depth: 0,
+        workspace_id: "".to_string(),
     });
     let err = svc.analyze_impact(req).await.unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
@@ -98,6 +102,7 @@ async fn test_rpc_empty_state_returns_empty_answer() {
         target: Some(proto_identity("kubernetes", "service", "api")),
         direction: "incoming".to_string(),
         max_depth: 3,
+        workspace_id: "".to_string(),
     });
     let resp = svc.analyze_impact(req).await.unwrap().into_inner();
     assert_eq!(resp.target.unwrap().provider_id, "api");
@@ -167,6 +172,7 @@ async fn test_in_process_grpc_server_and_client_roundtrip() {
         target: Some(proto_identity("kubernetes", "service", "payments-api")),
         direction: "incoming".to_string(),
         max_depth: 2,
+        workspace_id: "".to_string(),
     };
 
     let resp = client.analyze_impact(req).await.unwrap().into_inner();
@@ -190,4 +196,72 @@ async fn test_in_process_grpc_server_and_client_roundtrip() {
     }
 
     server_handle.abort();
+}
+
+#[tokio::test]
+async fn test_rpc_load_state_and_workspace_isolation() {
+    let answer_svc = AnswerServiceImpl::default();
+
+    let ev_id_str = "550e8400-e29b-41d4-a716-446655440099";
+    let ev = proto::Evidence {
+        id: ev_id_str.to_string(),
+        source: Some(proto::EvidenceSource {
+            provider: "kubernetes".to_string(),
+            collector: "k8s-runtime".to_string(),
+        }),
+        observed_at: "2026-10-06T12:00:00Z".to_string(),
+        observation_type: "RUNTIME_CONNECTION".to_string(),
+        subject: Some(proto_identity("kubernetes", "service", "orders")),
+        data: serde_json::to_vec(&serde_json::json!({"dest": "db"})).unwrap(),
+    };
+
+    let rel = proto::Relationship {
+        source: Some(proto_identity("kubernetes", "service", "orders")),
+        target: Some(proto_identity("kubernetes", "service", "catalog")),
+        kind: "DEPENDS_ON".to_string(),
+        category: "Dependency".to_string(),
+    };
+
+    let assoc = proto::RelationshipEvidence {
+        relationship: Some(rel.clone()),
+        evidence_ids: vec![ev_id_str.to_string()],
+    };
+
+    // Load state into workspace-A
+    let load_req = Request::new(proto::LoadStateRequest {
+        workspace_id: "workspace-A".to_string(),
+        relationships: vec![rel],
+        associations: vec![assoc],
+        evidence: vec![ev],
+    });
+
+    let load_resp = answer_svc.load_state(load_req).await.unwrap().into_inner();
+    assert_eq!(load_resp.workspace_id, "workspace-A");
+    assert_eq!(load_resp.relationships_loaded, 1);
+    assert_eq!(load_resp.evidence_loaded, 1);
+    assert_eq!(load_resp.provenance_links_loaded, 1);
+
+    // Query impact for workspace-A -> should find orders impacted
+    let req_a = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "catalog")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "workspace-A".to_string(),
+    });
+    let resp_a = answer_svc.analyze_impact(req_a).await.unwrap().into_inner();
+    assert_eq!(resp_a.summary.unwrap().impacted_count, 1);
+    assert_eq!(resp_a.relationships.len(), 1);
+    assert_eq!(resp_a.relationships[0].state, "Supported");
+
+    // Query impact for workspace-B (identical target identity) -> MUST BE ISOLATED (0 impacted)
+    let req_b = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "catalog")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "workspace-B".to_string(),
+    });
+    let resp_b = answer_svc.analyze_impact(req_b).await.unwrap().into_inner();
+    assert_eq!(resp_b.summary.unwrap().impacted_count, 0);
+    assert!(resp_b.impacted_resources.is_empty());
+    assert!(resp_b.relationships.is_empty());
 }

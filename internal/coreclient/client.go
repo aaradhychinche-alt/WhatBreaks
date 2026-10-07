@@ -103,6 +103,19 @@ func (c *Client) AnalyzeImpact(ctx context.Context, req *corev1.AnalyzeImpactReq
 	return c.answerClient.AnalyzeImpact(ctx, req, opts...)
 }
 
+// LoadState sends a LoadStateRequest to the Rust Core Engine AnswerService to populate the in-memory graph.
+// It returns the LoadStateResponse or the gRPC status error without modifying status codes.
+func (c *Client) LoadState(ctx context.Context, req *corev1.LoadStateRequest, opts ...grpc.CallOption) (*corev1.LoadStateResponse, error) {
+	if c == nil || c.answerClient == nil {
+		return nil, status.Error(codes.FailedPrecondition, "client is not connected")
+	}
+	if req == nil {
+		return nil, status.Error(codes.InvalidArgument, "request cannot be nil")
+	}
+
+	return c.answerClient.LoadState(ctx, req, opts...)
+}
+
 // AnswerServiceClient returns the raw generated AnswerServiceClient interface.
 func (c *Client) AnswerServiceClient() corev1.AnswerServiceClient {
 	return c.answerClient

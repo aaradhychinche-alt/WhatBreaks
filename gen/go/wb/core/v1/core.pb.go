@@ -805,7 +805,9 @@ type AnalyzeImpactRequest struct {
 	// Traversal direction: "incoming" (upstream dependents) or "outgoing" (downstream dependencies).
 	Direction string `protobuf:"bytes,2,opt,name=direction,proto3" json:"direction,omitempty"`
 	// Maximum hop depth to explore (must be >= 1).
-	MaxDepth      uint32 `protobuf:"varint,3,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"`
+	MaxDepth uint32 `protobuf:"varint,3,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"`
+	// Workspace scope for tenant isolation (optional, empty defaults to default tenant).
+	WorkspaceId   string `protobuf:"bytes,4,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -859,6 +861,13 @@ func (x *AnalyzeImpactRequest) GetMaxDepth() uint32 {
 		return x.MaxDepth
 	}
 	return 0
+}
+
+func (x *AnalyzeImpactRequest) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
 }
 
 // Deterministic aggregate facts summarizing the candidate blast radius.
@@ -1320,6 +1329,201 @@ func (x *AnalyzeImpactResponse) GetExplanationFacts() []*ExplanationFact {
 	return nil
 }
 
+// Association between a relationship and its supporting evidence observations.
+type RelationshipEvidence struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Relationship  *Relationship          `protobuf:"bytes,1,opt,name=relationship,proto3" json:"relationship,omitempty"`
+	EvidenceIds   []string               `protobuf:"bytes,2,rep,name=evidence_ids,json=evidenceIds,proto3" json:"evidence_ids,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RelationshipEvidence) Reset() {
+	*x = RelationshipEvidence{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RelationshipEvidence) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RelationshipEvidence) ProtoMessage() {}
+
+func (x *RelationshipEvidence) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RelationshipEvidence.ProtoReflect.Descriptor instead.
+func (*RelationshipEvidence) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *RelationshipEvidence) GetRelationship() *Relationship {
+	if x != nil {
+		return x.Relationship
+	}
+	return nil
+}
+
+func (x *RelationshipEvidence) GetEvidenceIds() []string {
+	if x != nil {
+		return x.EvidenceIds
+	}
+	return nil
+}
+
+// Request to load assembled state into the Core Engine for a workspace.
+type LoadStateRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Workspace identifier for multi-tenant isolation.
+	WorkspaceId string `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// Authoritative relationships to populate into the graph.
+	Relationships []*Relationship `protobuf:"bytes,2,rep,name=relationships,proto3" json:"relationships,omitempty"`
+	// Provenance associations linking relationships to evidence IDs.
+	Associations []*RelationshipEvidence `protobuf:"bytes,3,rep,name=associations,proto3" json:"associations,omitempty"`
+	// Evidence observations supporting the relationships.
+	Evidence      []*Evidence `protobuf:"bytes,4,rep,name=evidence,proto3" json:"evidence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LoadStateRequest) Reset() {
+	*x = LoadStateRequest{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LoadStateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LoadStateRequest) ProtoMessage() {}
+
+func (x *LoadStateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LoadStateRequest.ProtoReflect.Descriptor instead.
+func (*LoadStateRequest) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *LoadStateRequest) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *LoadStateRequest) GetRelationships() []*Relationship {
+	if x != nil {
+		return x.Relationships
+	}
+	return nil
+}
+
+func (x *LoadStateRequest) GetAssociations() []*RelationshipEvidence {
+	if x != nil {
+		return x.Associations
+	}
+	return nil
+}
+
+func (x *LoadStateRequest) GetEvidence() []*Evidence {
+	if x != nil {
+		return x.Evidence
+	}
+	return nil
+}
+
+// Response acknowledging state loading into the Core Engine.
+type LoadStateResponse struct {
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	WorkspaceId           string                 `protobuf:"bytes,1,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	RelationshipsLoaded   uint32                 `protobuf:"varint,2,opt,name=relationships_loaded,json=relationshipsLoaded,proto3" json:"relationships_loaded,omitempty"`
+	EvidenceLoaded        uint32                 `protobuf:"varint,3,opt,name=evidence_loaded,json=evidenceLoaded,proto3" json:"evidence_loaded,omitempty"`
+	ProvenanceLinksLoaded uint32                 `protobuf:"varint,4,opt,name=provenance_links_loaded,json=provenanceLinksLoaded,proto3" json:"provenance_links_loaded,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *LoadStateResponse) Reset() {
+	*x = LoadStateResponse{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LoadStateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LoadStateResponse) ProtoMessage() {}
+
+func (x *LoadStateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LoadStateResponse.ProtoReflect.Descriptor instead.
+func (*LoadStateResponse) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *LoadStateResponse) GetWorkspaceId() string {
+	if x != nil {
+		return x.WorkspaceId
+	}
+	return ""
+}
+
+func (x *LoadStateResponse) GetRelationshipsLoaded() uint32 {
+	if x != nil {
+		return x.RelationshipsLoaded
+	}
+	return 0
+}
+
+func (x *LoadStateResponse) GetEvidenceLoaded() uint32 {
+	if x != nil {
+		return x.EvidenceLoaded
+	}
+	return 0
+}
+
+func (x *LoadStateResponse) GetProvenanceLinksLoaded() uint32 {
+	if x != nil {
+		return x.ProvenanceLinksLoaded
+	}
+	return 0
+}
+
 var File_wb_core_v1_core_proto protoreflect.FileDescriptor
 
 const file_wb_core_v1_core_proto_rawDesc = "" +
@@ -1366,11 +1570,12 @@ const file_wb_core_v1_core_proto_rawDesc = "" +
 	"\x13RunDiscoveryRequest\x120\n" +
 	"\bevidence\x18\x01 \x03(\v2\x14.wb.core.v1.EvidenceR\bevidence\"M\n" +
 	"\x14RunDiscoveryResponse\x125\n" +
-	"\aresults\x18\x01 \x03(\v2\x1b.wb.core.v1.DiscoveryResultR\aresults\"\x87\x01\n" +
+	"\aresults\x18\x01 \x03(\v2\x1b.wb.core.v1.DiscoveryResultR\aresults\"\xaa\x01\n" +
 	"\x14AnalyzeImpactRequest\x124\n" +
 	"\x06target\x18\x01 \x01(\v2\x1c.wb.core.v1.ResourceIdentityR\x06target\x12\x1c\n" +
 	"\tdirection\x18\x02 \x01(\tR\tdirection\x12\x1b\n" +
-	"\tmax_depth\x18\x03 \x01(\rR\bmaxDepth\"\x9d\x01\n" +
+	"\tmax_depth\x18\x03 \x01(\rR\bmaxDepth\x12!\n" +
+	"\fworkspace_id\x18\x04 \x01(\tR\vworkspaceId\"\x9d\x01\n" +
 	"\rImpactSummary\x12%\n" +
 	"\x0eimpacted_count\x18\x01 \x01(\rR\rimpactedCount\x12!\n" +
 	"\fdirect_count\x18\x02 \x01(\rR\vdirectCount\x12%\n" +
@@ -1404,11 +1609,25 @@ const file_wb_core_v1_core_proto_rawDesc = "" +
 	"\rrelationships\x18\x04 \x03(\v2\x1e.wb.core.v1.AnswerRelationshipR\rrelationships\x12,\n" +
 	"\x05paths\x18\x05 \x03(\v2\x16.wb.core.v1.ImpactPathR\x05paths\x126\n" +
 	"\bevidence\x18\x06 \x03(\v2\x1a.wb.core.v1.AnswerEvidenceR\bevidence\x12H\n" +
-	"\x11explanation_facts\x18\a \x03(\v2\x1b.wb.core.v1.ExplanationFactR\x10explanationFacts2e\n" +
+	"\x11explanation_facts\x18\a \x03(\v2\x1b.wb.core.v1.ExplanationFactR\x10explanationFacts\"w\n" +
+	"\x14RelationshipEvidence\x12<\n" +
+	"\frelationship\x18\x01 \x01(\v2\x18.wb.core.v1.RelationshipR\frelationship\x12!\n" +
+	"\fevidence_ids\x18\x02 \x03(\tR\vevidenceIds\"\xed\x01\n" +
+	"\x10LoadStateRequest\x12!\n" +
+	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12>\n" +
+	"\rrelationships\x18\x02 \x03(\v2\x18.wb.core.v1.RelationshipR\rrelationships\x12D\n" +
+	"\fassociations\x18\x03 \x03(\v2 .wb.core.v1.RelationshipEvidenceR\fassociations\x120\n" +
+	"\bevidence\x18\x04 \x03(\v2\x14.wb.core.v1.EvidenceR\bevidence\"\xca\x01\n" +
+	"\x11LoadStateResponse\x12!\n" +
+	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x121\n" +
+	"\x14relationships_loaded\x18\x02 \x01(\rR\x13relationshipsLoaded\x12'\n" +
+	"\x0fevidence_loaded\x18\x03 \x01(\rR\x0eevidenceLoaded\x126\n" +
+	"\x17provenance_links_loaded\x18\x04 \x01(\rR\x15provenanceLinksLoaded2e\n" +
 	"\x10DiscoveryService\x12Q\n" +
-	"\fRunDiscovery\x12\x1f.wb.core.v1.RunDiscoveryRequest\x1a .wb.core.v1.RunDiscoveryResponse2e\n" +
+	"\fRunDiscovery\x12\x1f.wb.core.v1.RunDiscoveryRequest\x1a .wb.core.v1.RunDiscoveryResponse2\xaf\x01\n" +
 	"\rAnswerService\x12T\n" +
-	"\rAnalyzeImpact\x12 .wb.core.v1.AnalyzeImpactRequest\x1a!.wb.core.v1.AnalyzeImpactResponseBCZAgithub.com/aaradhychinche-alt/WhatBreaks/gen/go/wb/core/v1;corev1b\x06proto3"
+	"\rAnalyzeImpact\x12 .wb.core.v1.AnalyzeImpactRequest\x1a!.wb.core.v1.AnalyzeImpactResponse\x12H\n" +
+	"\tLoadState\x12\x1c.wb.core.v1.LoadStateRequest\x1a\x1d.wb.core.v1.LoadStateResponseBCZAgithub.com/aaradhychinche-alt/WhatBreaks/gen/go/wb/core/v1;corev1b\x06proto3"
 
 var (
 	file_wb_core_v1_core_proto_rawDescOnce sync.Once
@@ -1422,7 +1641,7 @@ func file_wb_core_v1_core_proto_rawDescGZIP() []byte {
 	return file_wb_core_v1_core_proto_rawDescData
 }
 
-var file_wb_core_v1_core_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_wb_core_v1_core_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_wb_core_v1_core_proto_goTypes = []any{
 	(*ResourceIdentity)(nil),       // 0: wb.core.v1.ResourceIdentity
 	(*EvidenceSource)(nil),         // 1: wb.core.v1.EvidenceSource
@@ -1443,6 +1662,9 @@ var file_wb_core_v1_core_proto_goTypes = []any{
 	(*AnswerEvidence)(nil),         // 16: wb.core.v1.AnswerEvidence
 	(*ExplanationFact)(nil),        // 17: wb.core.v1.ExplanationFact
 	(*AnalyzeImpactResponse)(nil),  // 18: wb.core.v1.AnalyzeImpactResponse
+	(*RelationshipEvidence)(nil),   // 19: wb.core.v1.RelationshipEvidence
+	(*LoadStateRequest)(nil),       // 20: wb.core.v1.LoadStateRequest
+	(*LoadStateResponse)(nil),      // 21: wb.core.v1.LoadStateResponse
 }
 var file_wb_core_v1_core_proto_depIdxs = []int32{
 	1,  // 0: wb.core.v1.Evidence.source:type_name -> wb.core.v1.EvidenceSource
@@ -1471,15 +1693,21 @@ var file_wb_core_v1_core_proto_depIdxs = []int32{
 	15, // 23: wb.core.v1.AnalyzeImpactResponse.paths:type_name -> wb.core.v1.ImpactPath
 	16, // 24: wb.core.v1.AnalyzeImpactResponse.evidence:type_name -> wb.core.v1.AnswerEvidence
 	17, // 25: wb.core.v1.AnalyzeImpactResponse.explanation_facts:type_name -> wb.core.v1.ExplanationFact
-	9,  // 26: wb.core.v1.DiscoveryService.RunDiscovery:input_type -> wb.core.v1.RunDiscoveryRequest
-	11, // 27: wb.core.v1.AnswerService.AnalyzeImpact:input_type -> wb.core.v1.AnalyzeImpactRequest
-	10, // 28: wb.core.v1.DiscoveryService.RunDiscovery:output_type -> wb.core.v1.RunDiscoveryResponse
-	18, // 29: wb.core.v1.AnswerService.AnalyzeImpact:output_type -> wb.core.v1.AnalyzeImpactResponse
-	28, // [28:30] is the sub-list for method output_type
-	26, // [26:28] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	3,  // 26: wb.core.v1.RelationshipEvidence.relationship:type_name -> wb.core.v1.Relationship
+	3,  // 27: wb.core.v1.LoadStateRequest.relationships:type_name -> wb.core.v1.Relationship
+	19, // 28: wb.core.v1.LoadStateRequest.associations:type_name -> wb.core.v1.RelationshipEvidence
+	2,  // 29: wb.core.v1.LoadStateRequest.evidence:type_name -> wb.core.v1.Evidence
+	9,  // 30: wb.core.v1.DiscoveryService.RunDiscovery:input_type -> wb.core.v1.RunDiscoveryRequest
+	11, // 31: wb.core.v1.AnswerService.AnalyzeImpact:input_type -> wb.core.v1.AnalyzeImpactRequest
+	20, // 32: wb.core.v1.AnswerService.LoadState:input_type -> wb.core.v1.LoadStateRequest
+	10, // 33: wb.core.v1.DiscoveryService.RunDiscovery:output_type -> wb.core.v1.RunDiscoveryResponse
+	18, // 34: wb.core.v1.AnswerService.AnalyzeImpact:output_type -> wb.core.v1.AnalyzeImpactResponse
+	21, // 35: wb.core.v1.AnswerService.LoadState:output_type -> wb.core.v1.LoadStateResponse
+	33, // [33:36] is the sub-list for method output_type
+	30, // [30:33] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_wb_core_v1_core_proto_init() }
@@ -1499,7 +1727,7 @@ func file_wb_core_v1_core_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wb_core_v1_core_proto_rawDesc), len(file_wb_core_v1_core_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   19,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

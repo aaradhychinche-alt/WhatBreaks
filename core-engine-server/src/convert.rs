@@ -137,6 +137,96 @@ pub fn relationship_to_proto(rel: &Relationship) -> proto::Relationship {
     }
 }
 
+/// Convert a protobuf `Relationship` to domain `Relationship`.
+pub fn proto_to_relationship(p: proto::Relationship) -> Result<Relationship, Status> {
+    let source_proto = p
+        .source
+        .ok_or_else(|| Status::invalid_argument("missing required field: relationship.source"))?;
+    let source = proto_to_resource_identity(source_proto)?;
+
+    let target_proto = p
+        .target
+        .ok_or_else(|| Status::invalid_argument("missing required field: relationship.target"))?;
+    let target = proto_to_resource_identity(target_proto)?;
+
+    let kind_str = p.kind.trim();
+    if kind_str.is_empty() {
+        return Err(Status::invalid_argument(
+            "relationship.kind cannot be empty",
+        ));
+    }
+    let kind_upper = kind_str.to_ascii_uppercase();
+    let canonical_cat = match kind_upper.as_str() {
+        "DEPENDS_ON" => Some(wb_core_engine::relationship::RelationshipCategory::Dependency),
+        "CALLS" => Some(wb_core_engine::relationship::RelationshipCategory::Invocation),
+        "READS_FROM" => Some(wb_core_engine::relationship::RelationshipCategory::DataFlow),
+        "WRITES_TO" => Some(wb_core_engine::relationship::RelationshipCategory::DataFlow),
+        "OWNS" => Some(wb_core_engine::relationship::RelationshipCategory::Ownership),
+        "RUNS_ON" => Some(wb_core_engine::relationship::RelationshipCategory::Placement),
+        "AUTHORIZES" => Some(wb_core_engine::relationship::RelationshipCategory::Authorization),
+        _ => None,
+    };
+
+    let kind = if canonical_cat.is_some() {
+        wb_core_engine::relationship::RelationshipKind::new(kind_upper)
+    } else {
+        wb_core_engine::relationship::RelationshipKind::new(kind_str)
+    };
+
+    let category_opt = match p.category.trim().to_lowercase().as_str() {
+        "dependency" => Some(wb_core_engine::relationship::RelationshipCategory::Dependency),
+        "dataflow" => Some(wb_core_engine::relationship::RelationshipCategory::DataFlow),
+        "invocation" => Some(wb_core_engine::relationship::RelationshipCategory::Invocation),
+        "authorization" => Some(wb_core_engine::relationship::RelationshipCategory::Authorization),
+        "ownership" => Some(wb_core_engine::relationship::RelationshipCategory::Ownership),
+        "placement" => Some(wb_core_engine::relationship::RelationshipCategory::Placement),
+        "network" => Some(wb_core_engine::relationship::RelationshipCategory::Network),
+        _ => None,
+    };
+
+    let effective_cat = category_opt.or(canonical_cat);
+
+    if let Some(canonical) = kind.category() {
+        if let Some(cat) = category_opt {
+            if cat != canonical {
+                return Err(Status::invalid_argument(format!(
+                    "relationship kind '{}' requires category '{:?}', but '{:?}' was provided",
+                    kind, canonical, cat
+                )));
+            }
+        }
+        Ok(Relationship::new(source, target, kind))
+    } else if let Some(cat) = effective_cat {
+        Ok(Relationship::with_category(source, target, kind, cat))
+    } else {
+        Err(Status::invalid_argument(format!(
+            "relationship kind '{}' has no canonical category; valid category must be provided",
+            kind
+        )))
+    }
+}
+
+/// Convert a protobuf `RelationshipEvidence` to domain `Relationship` and evidence IDs.
+pub fn proto_to_relationship_evidence(
+    p: proto::RelationshipEvidence,
+) -> Result<(Relationship, Vec<wb_core_engine::evidence::EvidenceId>), Status> {
+    let rel_proto = p.relationship.ok_or_else(|| {
+        Status::invalid_argument("missing required field: relationship_evidence.relationship")
+    })?;
+    let rel = proto_to_relationship(rel_proto)?;
+
+    let mut evidence_ids = Vec::with_capacity(p.evidence_ids.len());
+    for id_str in p.evidence_ids {
+        let ev_id: wb_core_engine::evidence::EvidenceId =
+            serde_json::from_str(&format!("\"{}\"", id_str)).map_err(|e| {
+                Status::invalid_argument(format!("malformed evidence id '{}': {}", id_str, e))
+            })?;
+        evidence_ids.push(ev_id);
+    }
+
+    Ok((rel, evidence_ids))
+}
+
 /// Convert a domain `DiscoveredRelationship` to protobuf.
 pub fn discovered_relationship_to_proto(
     dr: &DiscoveredRelationship,

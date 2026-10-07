@@ -87,6 +87,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wsID := h.getWSID(r)
+	if wsID != "" && req.WorkspaceID == "" {
+		req.WorkspaceID = wsID
+	}
+
 	// 3. Validate request schema and boundaries
 	if err := ValidateImpactRequest(&req); err != nil {
 		writeErrorResponse(w, http.StatusBadRequest, err.Error(), string(CodeValidationError))

@@ -76,7 +76,8 @@ type ImpactAnswer struct {
 
 // ImpactRequest defines the incoming payload for impact analysis.
 type ImpactRequest struct {
-	Target    *ResourceIdentity `json:"target"`
-	Direction string            `json:"direction"`
-	MaxDepth  uint32            `json:"max_depth"`
+	Target      *ResourceIdentity `json:"target"`
+	Direction   string            `json:"direction"`
+	MaxDepth    uint32            `json:"max_depth"`
+	WorkspaceID string            `json:"workspace_id,omitempty"`
 }

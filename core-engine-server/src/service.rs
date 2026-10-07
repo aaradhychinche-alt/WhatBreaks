@@ -67,58 +67,81 @@ impl DiscoveryService for DiscoveryServiceImpl {
 // AnswerService Implementation
 // ---------------------------------------------------------------------------
 
+use std::collections::HashMap;
 use std::sync::RwLock;
 use wb_core_engine::answer::AnswerEngine;
 use wb_core_engine::{Evidence, Graph, ProvenanceStore};
 use wb_core_proto::core_v1::answer_service_server::AnswerService;
-use wb_core_proto::core_v1::{AnalyzeImpactRequest, AnalyzeImpactResponse};
+use wb_core_proto::core_v1::{
+    AnalyzeImpactRequest, AnalyzeImpactResponse, LoadStateRequest, LoadStateResponse,
+};
 
-use crate::convert::{impact_answer_to_proto, proto_to_answer_request};
+use crate::convert::{
+    impact_answer_to_proto, proto_to_answer_request, proto_to_relationship,
+    proto_to_relationship_evidence,
+};
+
+/// Tenant state encapsulating the authoritative Graph, ProvenanceStore, and Evidence.
+#[derive(Clone, Default)]
+pub struct TenantState {
+    pub graph: Graph,
+    pub provenance: ProvenanceStore,
+    pub evidence: Vec<Evidence>,
+}
 
 /// Concrete implementation of `wb.core.v1.AnswerService`.
 ///
-/// Holds in-memory Graph, ProvenanceStore, and Evidence state and delegates
-/// impact analysis to `AnswerEngine::analyze`.
+/// Holds in-memory Graph, ProvenanceStore, and Evidence state per workspace (tenant)
+/// and delegates impact analysis to `AnswerEngine::analyze`.
 #[derive(Clone, Default)]
 pub struct AnswerServiceImpl {
-    graph: Arc<RwLock<Graph>>,
-    provenance: Arc<RwLock<ProvenanceStore>>,
-    evidence: Arc<RwLock<Vec<Evidence>>>,
+    tenants: Arc<RwLock<HashMap<String, TenantState>>>,
 }
 
 impl AnswerServiceImpl {
-    /// Create a new `AnswerServiceImpl` wrapping the provided state.
-    pub fn new(
-        graph: Arc<RwLock<Graph>>,
-        provenance: Arc<RwLock<ProvenanceStore>>,
-        evidence: Arc<RwLock<Vec<Evidence>>>,
-    ) -> Self {
-        Self {
-            graph,
-            provenance,
-            evidence,
-        }
+    /// Create a new `AnswerServiceImpl` wrapping the provided tenant map.
+    pub fn new(tenants: Arc<RwLock<HashMap<String, TenantState>>>) -> Self {
+        Self { tenants }
     }
 
-    /// Create an `AnswerServiceImpl` initialized with specific domain state.
+    /// Create an `AnswerServiceImpl` initialized with specific domain state in the default tenant ("").
     pub fn with_state(graph: Graph, provenance: ProvenanceStore, evidence: Vec<Evidence>) -> Self {
+        let mut map = HashMap::new();
+        map.insert(
+            "".to_string(),
+            TenantState {
+                graph,
+                provenance,
+                evidence,
+            },
+        );
         Self {
-            graph: Arc::new(RwLock::new(graph)),
-            provenance: Arc::new(RwLock::new(provenance)),
-            evidence: Arc::new(RwLock::new(evidence)),
+            tenants: Arc::new(RwLock::new(map)),
         }
     }
 
-    /// Update the internal state atomically.
+    /// Update the default tenant state atomically.
     pub fn set_state(&self, graph: Graph, provenance: ProvenanceStore, evidence: Vec<Evidence>) {
-        if let Ok(mut g) = self.graph.write() {
-            *g = graph;
-        }
-        if let Ok(mut p) = self.provenance.write() {
-            *p = provenance;
-        }
-        if let Ok(mut e) = self.evidence.write() {
-            *e = evidence;
+        self.set_workspace_state("", graph, provenance, evidence);
+    }
+
+    /// Update a specific workspace tenant state atomically.
+    pub fn set_workspace_state(
+        &self,
+        workspace_id: &str,
+        graph: Graph,
+        provenance: ProvenanceStore,
+        evidence: Vec<Evidence>,
+    ) {
+        if let Ok(mut map) = self.tenants.write() {
+            map.insert(
+                workspace_id.to_string(),
+                TenantState {
+                    graph,
+                    provenance,
+                    evidence,
+                },
+            );
         }
     }
 }
@@ -130,24 +153,72 @@ impl AnswerService for AnswerServiceImpl {
         request: Request<AnalyzeImpactRequest>,
     ) -> Result<Response<AnalyzeImpactResponse>, Status> {
         let req = request.into_inner();
+        let ws_id = req.workspace_id.clone();
         let domain_req = proto_to_answer_request(req)?;
 
-        let graph = self
-            .graph
+        let tenants = self
+            .tenants
             .read()
-            .map_err(|_| Status::internal("graph lock poisoned"))?;
-        let provenance = self
-            .provenance
-            .read()
-            .map_err(|_| Status::internal("provenance lock poisoned"))?;
-        let evidence = self
-            .evidence
-            .read()
-            .map_err(|_| Status::internal("evidence lock poisoned"))?;
+            .map_err(|_| Status::internal("tenants lock poisoned"))?;
 
-        let answer = AnswerEngine::analyze(&graph, &provenance, &evidence, &domain_req);
+        let empty_state = TenantState::default();
+        let tenant_state = tenants.get(&ws_id).unwrap_or(&empty_state);
+
+        let answer = AnswerEngine::analyze(
+            &tenant_state.graph,
+            &tenant_state.provenance,
+            &tenant_state.evidence,
+            &domain_req,
+        );
         let proto_resp = impact_answer_to_proto(answer);
 
         Ok(Response::new(proto_resp))
+    }
+
+    async fn load_state(
+        &self,
+        request: Request<LoadStateRequest>,
+    ) -> Result<Response<LoadStateResponse>, Status> {
+        let req = request.into_inner();
+        let workspace_id = req.workspace_id;
+
+        let mut graph = Graph::new();
+        let mut provenance = ProvenanceStore::new();
+
+        let mut rel_count = 0u32;
+        for rel_proto in req.relationships {
+            let rel = proto_to_relationship(rel_proto)?;
+            graph.add_relationship(rel.clone());
+            provenance.add_relationship(rel);
+            rel_count += 1;
+        }
+
+        let mut prov_count = 0u32;
+        for assoc in req.associations {
+            let (rel, ev_ids) = proto_to_relationship_evidence(assoc)?;
+            graph.add_relationship(rel.clone());
+            provenance.add_relationship(rel.clone());
+            for ev_id in ev_ids {
+                provenance.add_evidence(&rel, ev_id);
+                prov_count += 1;
+            }
+        }
+
+        let mut ev_count = 0u32;
+        let mut evidence = Vec::with_capacity(req.evidence.len());
+        for ev_proto in req.evidence {
+            let ev = proto_to_evidence(ev_proto)?;
+            evidence.push(ev);
+            ev_count += 1;
+        }
+
+        self.set_workspace_state(&workspace_id, graph, provenance, evidence);
+
+        Ok(Response::new(LoadStateResponse {
+            workspace_id,
+            relationships_loaded: rel_count,
+            evidence_loaded: ev_count,
+            provenance_links_loaded: prov_count,
+        }))
     }
 }

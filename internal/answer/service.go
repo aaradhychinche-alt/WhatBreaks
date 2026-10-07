@@ -54,8 +54,9 @@ func (s *service) AnalyzeImpact(ctx context.Context, req ImpactRequest) (*Impact
 			ResourceType: req.Target.ResourceType,
 			ProviderId:   req.Target.ProviderID,
 		},
-		Direction: strings.ToLower(strings.TrimSpace(req.Direction)),
-		MaxDepth:  req.MaxDepth,
+		Direction:   strings.ToLower(strings.TrimSpace(req.Direction)),
+		MaxDepth:    req.MaxDepth,
+		WorkspaceId: req.WorkspaceID,
 	}
 
 	protoResp, err := s.client.AnalyzeImpact(ctx, protoReq)

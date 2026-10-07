@@ -157,6 +157,7 @@ var DiscoveryService_ServiceDesc = grpc.ServiceDesc{
 
 const (
 	AnswerService_AnalyzeImpact_FullMethodName = "/wb.core.v1.AnswerService/AnalyzeImpact"
+	AnswerService_LoadState_FullMethodName     = "/wb.core.v1.AnswerService/LoadState"
 )
 
 // AnswerServiceClient is the client API for AnswerService service.
@@ -166,11 +167,14 @@ const (
 // ---------------------------------------------------------------------------
 // AnswerService
 //
-// The service providing deterministic, explainable impact analysis.
+// The service providing deterministic, explainable impact analysis and
+// materializing assembled state.
 // ---------------------------------------------------------------------------
 type AnswerServiceClient interface {
 	// Analyze candidate blast radius and return structured, explainable facts.
 	AnalyzeImpact(ctx context.Context, in *AnalyzeImpactRequest, opts ...grpc.CallOption) (*AnalyzeImpactResponse, error)
+	// Load authoritative assembled state into the Core Engine for a workspace.
+	LoadState(ctx context.Context, in *LoadStateRequest, opts ...grpc.CallOption) (*LoadStateResponse, error)
 }
 
 type answerServiceClient struct {
@@ -191,6 +195,16 @@ func (c *answerServiceClient) AnalyzeImpact(ctx context.Context, in *AnalyzeImpa
 	return out, nil
 }
 
+func (c *answerServiceClient) LoadState(ctx context.Context, in *LoadStateRequest, opts ...grpc.CallOption) (*LoadStateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LoadStateResponse)
+	err := c.cc.Invoke(ctx, AnswerService_LoadState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AnswerServiceServer is the server API for AnswerService service.
 // All implementations must embed UnimplementedAnswerServiceServer
 // for forward compatibility.
@@ -198,11 +212,14 @@ func (c *answerServiceClient) AnalyzeImpact(ctx context.Context, in *AnalyzeImpa
 // ---------------------------------------------------------------------------
 // AnswerService
 //
-// The service providing deterministic, explainable impact analysis.
+// The service providing deterministic, explainable impact analysis and
+// materializing assembled state.
 // ---------------------------------------------------------------------------
 type AnswerServiceServer interface {
 	// Analyze candidate blast radius and return structured, explainable facts.
 	AnalyzeImpact(context.Context, *AnalyzeImpactRequest) (*AnalyzeImpactResponse, error)
+	// Load authoritative assembled state into the Core Engine for a workspace.
+	LoadState(context.Context, *LoadStateRequest) (*LoadStateResponse, error)
 	mustEmbedUnimplementedAnswerServiceServer()
 }
 
@@ -215,6 +232,9 @@ type UnimplementedAnswerServiceServer struct{}
 
 func (UnimplementedAnswerServiceServer) AnalyzeImpact(context.Context, *AnalyzeImpactRequest) (*AnalyzeImpactResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AnalyzeImpact not implemented")
+}
+func (UnimplementedAnswerServiceServer) LoadState(context.Context, *LoadStateRequest) (*LoadStateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LoadState not implemented")
 }
 func (UnimplementedAnswerServiceServer) mustEmbedUnimplementedAnswerServiceServer() {}
 func (UnimplementedAnswerServiceServer) testEmbeddedByValue()                       {}
@@ -255,6 +275,24 @@ func _AnswerService_AnalyzeImpact_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AnswerService_LoadState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LoadStateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AnswerServiceServer).LoadState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AnswerService_LoadState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AnswerServiceServer).LoadState(ctx, req.(*LoadStateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AnswerService_ServiceDesc is the grpc.ServiceDesc for AnswerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -265,6 +303,10 @@ var AnswerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AnalyzeImpact",
 			Handler:    _AnswerService_AnalyzeImpact_Handler,
+		},
+		{
+			MethodName: "LoadState",
+			Handler:    _AnswerService_LoadState_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

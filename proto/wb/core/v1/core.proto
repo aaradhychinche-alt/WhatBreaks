@@ -231,6 +231,9 @@ message AnalyzeImpactRequest {
 
   // Maximum hop depth to explore (must be >= 1).
   uint32 max_depth = 3;
+
+  // Workspace scope for tenant isolation (optional, empty defaults to default tenant).
+  string workspace_id = 4;
 }
 
 // Deterministic aggregate facts summarizing the candidate blast radius.
@@ -287,12 +290,51 @@ message AnalyzeImpactResponse {
 }
 
 // ---------------------------------------------------------------------------
+// State Loading Messages
+//
+// Materialization of authoritative state from Go platform into Rust Core.
+// ---------------------------------------------------------------------------
+
+// Association between a relationship and its supporting evidence observations.
+message RelationshipEvidence {
+  Relationship relationship = 1;
+  repeated string evidence_ids = 2;
+}
+
+// Request to load assembled state into the Core Engine for a workspace.
+message LoadStateRequest {
+  // Workspace identifier for multi-tenant isolation.
+  string workspace_id = 1;
+
+  // Authoritative relationships to populate into the graph.
+  repeated Relationship relationships = 2;
+
+  // Provenance associations linking relationships to evidence IDs.
+  repeated RelationshipEvidence associations = 3;
+
+  // Evidence observations supporting the relationships.
+  repeated Evidence evidence = 4;
+}
+
+// Response acknowledging state loading into the Core Engine.
+message LoadStateResponse {
+  string workspace_id = 1;
+  uint32 relationships_loaded = 2;
+  uint32 evidence_loaded = 3;
+  uint32 provenance_links_loaded = 4;
+}
+
+// ---------------------------------------------------------------------------
 // AnswerService
 //
-// The service providing deterministic, explainable impact analysis.
+// The service providing deterministic, explainable impact analysis and
+// materializing assembled state.
 // ---------------------------------------------------------------------------
 service AnswerService {
   // Analyze candidate blast radius and return structured, explainable facts.
   rpc AnalyzeImpact(AnalyzeImpactRequest) returns (AnalyzeImpactResponse);
+
+  // Load authoritative assembled state into the Core Engine for a workspace.
+  rpc LoadState(LoadStateRequest) returns (LoadStateResponse);
 }
 

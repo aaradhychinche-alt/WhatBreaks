@@ -544,3 +544,49 @@ func TestClient_AnalyzeImpact_EmptyGraphSuccess(t *testing.T) {
 		t.Errorf("expected 0 impacted, got %d", resp.GetSummary().GetImpactedCount())
 	}
 }
+
+func TestClient_LoadState_NilRequest(t *testing.T) {
+	client, _ := startRustServer(t)
+
+	ctx := context.Background()
+	_, err := client.LoadState(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error for nil request")
+	}
+
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument for nil request, got %v", err)
+	}
+}
+
+func TestClient_LoadState_Roundtrip(t *testing.T) {
+	client, _ := startRustServer(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req := &corev1.LoadStateRequest{
+		WorkspaceId: "ws-test",
+		Relationships: []*corev1.Relationship{
+			{
+				Source:   podSubject("orders"),
+				Target:   podSubject("catalog"),
+				Kind:     "DEPENDS_ON",
+				Category: "Dependency",
+			},
+		},
+	}
+
+	resp, err := client.LoadState(ctx, req)
+	if err != nil {
+		t.Fatalf("LoadState failed: %v", err)
+	}
+
+	if resp.GetWorkspaceId() != "ws-test" {
+		t.Errorf("expected workspace_id ws-test, got %s", resp.GetWorkspaceId())
+	}
+	if resp.GetRelationshipsLoaded() != 1 {
+		t.Errorf("expected 1 relationship loaded, got %d", resp.GetRelationshipsLoaded())
+	}
+}
