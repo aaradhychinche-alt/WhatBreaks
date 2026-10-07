@@ -36,6 +36,7 @@ type Client interface {
 	ListNodes(ctx context.Context) ([]Node, error)
 	ListPods(ctx context.Context, namespace string) ([]Pod, error)
 	ListDeployments(ctx context.Context, namespace string) ([]Deployment, error)
+	ListReplicaSets(ctx context.Context, namespace string) ([]ReplicaSet, error)
 	ListServices(ctx context.Context, namespace string) ([]Service, error)
 	ListIngresses(ctx context.Context, namespace string) ([]Ingress, error)
 	ListConfigMaps(ctx context.Context, namespace string) ([]ConfigMap, error)
@@ -271,6 +272,14 @@ func (c *RESTClient) ListDeployments(ctx context.Context, namespace string) ([]D
 		path = fmt.Sprintf("/apis/apps/v1/namespaces/%s/deployments", url.PathEscape(namespace))
 	}
 	return getList[Deployment](ctx, c, path)
+}
+
+func (c *RESTClient) ListReplicaSets(ctx context.Context, namespace string) ([]ReplicaSet, error) {
+	path := "/apis/apps/v1/replicasets"
+	if namespace != "" {
+		path = fmt.Sprintf("/apis/apps/v1/namespaces/%s/replicasets", url.PathEscape(namespace))
+	}
+	return getList[ReplicaSet](ctx, c, path)
 }
 
 func (c *RESTClient) ListServices(ctx context.Context, namespace string) ([]Service, error) {

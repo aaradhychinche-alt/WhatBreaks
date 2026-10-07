@@ -255,3 +255,47 @@ func TestNormalizer_PVC_and_PV(t *testing.T) {
 		t.Fatalf("expected 2 evidence records for PV, got %d", len(pvEvs))
 	}
 }
+
+func TestNormalizer_ReplicaSet(t *testing.T) {
+	normalizer := NewNormalizer("cluster-1", "ws-1", "k8s-collector")
+	controller := true
+	rs := &ReplicaSet{
+		ObjectMeta: ObjectMeta{
+			Name:      "api-server-6789abc",
+			Namespace: "payments",
+			OwnerReferences: []OwnerReference{
+				{
+					APIVersion: "apps/v1",
+					Kind:       "Deployment",
+					Name:       "api-server",
+					UID:        "deploy-uid-123",
+					Controller: &controller,
+				},
+			},
+		},
+	}
+
+	evs := normalizer.NormalizeReplicaSet(rs)
+	if len(evs) != 2 {
+		t.Fatalf("expected 2 evidence records (1 CONFIG + 1 OWNER), got %d", len(evs))
+	}
+
+	var foundOwner bool
+	for _, ev := range evs {
+		if ev.ObservationType == ObservationOwnershipReference {
+			foundOwner = true
+			var data map[string]any
+			_ = json.Unmarshal(ev.Data, &data)
+			if data["owner_name"] != "api-server" {
+				t.Errorf("expected owner_name 'api-server', got %v", data["owner_name"])
+			}
+			if data["owner_kind"] != "Deployment" {
+				t.Errorf("expected owner_kind 'Deployment', got %v", data["owner_kind"])
+			}
+		}
+	}
+	if !foundOwner {
+		t.Errorf("missing ownership reference evidence in ReplicaSet normalization")
+	}
+}
+

@@ -258,6 +258,16 @@ func (c *Collector) Collect(ctx context.Context) ([]*corev1.Evidence, error) {
 				}
 			}
 
+			// ReplicaSets
+			replicaSets, err := c.client.ListReplicaSets(trackCtx, ns)
+			if err != nil {
+				c.logger.Warn("Failed to list replica sets", "namespace", ns, "error", err.Error())
+			} else {
+				for i := range replicaSets {
+					allEvidence = append(allEvidence, c.normalizer.NormalizeReplicaSet(&replicaSets[i])...)
+				}
+			}
+
 			// Services
 			services, err := c.client.ListServices(trackCtx, ns)
 			if err != nil {

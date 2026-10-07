@@ -21,9 +21,9 @@ pub fn create_answer_service(service: AnswerServiceImpl) -> AnswerServiceServer<
     AnswerServiceServer::new(service)
 }
 
-/// Run the gRPC server on the specified address with default v1 DiscoveryEngine and default AnswerServiceImpl.
+/// Run the gRPC server on the specified address with default v2 DiscoveryEngine and default AnswerServiceImpl.
 pub async fn run_server(addr: SocketAddr) -> Result<(), Box<dyn std::error::Error>> {
-    let engine = Arc::new(DiscoveryEngine::default_v1());
+    let engine = Arc::new(DiscoveryEngine::default_v2());
     let discovery_svc = create_service(engine);
     let answer_svc = create_answer_service(AnswerServiceImpl::default());
 

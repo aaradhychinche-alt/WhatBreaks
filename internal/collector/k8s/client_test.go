@@ -53,6 +53,12 @@ func TestClient_ListOperations(t *testing.T) {
 					{ObjectMeta: ObjectMeta{Name: "web-deploy", Namespace: "default"}},
 				},
 			})
+		case "/apis/apps/v1/namespaces/default/replicasets":
+			_ = json.NewEncoder(w).Encode(ResourceList[ReplicaSet]{
+				Items: []ReplicaSet{
+					{ObjectMeta: ObjectMeta{Name: "web-rs", Namespace: "default"}},
+				},
+			})
 		case "/api/v1/namespaces/default/services":
 			_ = json.NewEncoder(w).Encode(ResourceList[Service]{
 				Items: []Service{
@@ -120,6 +126,11 @@ func TestClient_ListOperations(t *testing.T) {
 	depList, err := client.ListDeployments(ctx, "default")
 	if err != nil || len(depList) != 1 {
 		t.Errorf("ListDeployments failed: %v, count: %d", err, len(depList))
+	}
+
+	rsList, err := client.ListReplicaSets(ctx, "default")
+	if err != nil || len(rsList) != 1 {
+		t.Errorf("ListReplicaSets failed: %v, count: %d", err, len(rsList))
 	}
 
 	// 5. Services

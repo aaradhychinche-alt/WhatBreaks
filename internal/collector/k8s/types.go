@@ -179,6 +179,23 @@ type PodTemplateSpec struct {
 	Spec       PodSpec    `json:"spec"`
 }
 
+// ReplicaSet represents a Kubernetes ReplicaSet workload.
+type ReplicaSet struct {
+	ObjectMeta ObjectMeta       `json:"metadata"`
+	Spec       ReplicaSetSpec   `json:"spec,omitempty"`
+	Status     ReplicaSetStatus `json:"status,omitempty"`
+}
+
+type ReplicaSetSpec struct {
+	Replicas *int32          `json:"replicas,omitempty"`
+	Selector LabelSelector   `json:"selector"`
+	Template PodTemplateSpec `json:"template,omitempty"`
+}
+
+type ReplicaSetStatus struct {
+	Replicas int32 `json:"replicas,omitempty"`
+}
+
 // Service represents a Kubernetes networking Service.
 type Service struct {
 	ObjectMeta ObjectMeta  `json:"metadata"`

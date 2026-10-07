@@ -32,6 +32,10 @@ func createMockKubeServer(t *testing.T) *httptest.Server {
 			_ = json.NewEncoder(w).Encode(ResourceList[Deployment]{
 				Items: []Deployment{{ObjectMeta: ObjectMeta{Name: "web-deploy", Namespace: "app-prod"}}},
 			})
+		case strings.Contains(p, "/replicasets"):
+			_ = json.NewEncoder(w).Encode(ResourceList[ReplicaSet]{
+				Items: []ReplicaSet{{ObjectMeta: ObjectMeta{Name: "web-rs", Namespace: "app-prod"}}},
+			})
 		case strings.Contains(p, "/services"):
 			_ = json.NewEncoder(w).Encode(ResourceList[Service]{
 				Items: []Service{{
@@ -106,7 +110,7 @@ func TestCollector_ClusterWideCollect(t *testing.T) {
 	}
 
 	// Verify cluster-scoped evidence exists
-	var foundNS, foundNode, foundDeploy, foundSvc bool
+	var foundNS, foundNode, foundDeploy, foundRS, foundSvc bool
 	for _, ev := range evs {
 		if ev.Subject.ResourceType == TypeNamespace {
 			foundNS = true
@@ -117,14 +121,17 @@ func TestCollector_ClusterWideCollect(t *testing.T) {
 		if ev.Subject.ResourceType == TypeDeployment {
 			foundDeploy = true
 		}
+		if ev.Subject.ResourceType == TypeReplicaSet {
+			foundRS = true
+		}
 		if ev.Subject.ResourceType == TypeService {
 			foundSvc = true
 		}
 	}
 
-	if !foundNS || !foundNode || !foundDeploy || !foundSvc {
-		t.Errorf("missing expected resources in sweep: ns=%v, node=%v, deploy=%v, svc=%v",
-			foundNS, foundNode, foundDeploy, foundSvc)
+	if !foundNS || !foundNode || !foundDeploy || !foundRS || !foundSvc {
+		t.Errorf("missing expected resources in sweep: ns=%v, node=%v, deploy=%v, rs=%v, svc=%v",
+			foundNS, foundNode, foundDeploy, foundRS, foundSvc)
 	}
 }
 

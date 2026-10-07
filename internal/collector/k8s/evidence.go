@@ -248,6 +248,37 @@ func (n *Normalizer) NormalizeDeployment(dep *Deployment) []*corev1.Evidence {
 	return evs
 }
 
+// NormalizeReplicaSet produces evidence for a ReplicaSet.
+func (n *Normalizer) NormalizeReplicaSet(rs *ReplicaSet) []*corev1.Evidence {
+	subject := BuildIdentity(n.clusterID, TypeReplicaSet, rs.ObjectMeta.Namespace, rs.ObjectMeta.Name)
+
+	configData := map[string]any{
+		"replicas":   rs.Spec.Replicas,
+		"selector":   rs.Spec.Selector.MatchLabels,
+		"cluster_id": n.clusterID,
+	}
+
+	evs := []*corev1.Evidence{
+		n.buildEvidence(ObservationConfiguration, subject, configData),
+	}
+
+	// Owner references (e.g. ReplicaSet owned by Deployment)
+	for _, owner := range rs.ObjectMeta.OwnerReferences {
+		ownerIdentity := BuildIdentity(n.clusterID, owner.Kind, rs.ObjectMeta.Namespace, owner.Name)
+		ownerData := map[string]any{
+			"owner":                ownerIdentity,
+			"owner_kind":           owner.Kind,
+			"owner_name":           owner.Name,
+			"owner_uid":            owner.UID,
+			"controller":           owner.Controller != nil && *owner.Controller,
+			"block_owner_deletion": owner.BlockOwnerDeletion != nil && *owner.BlockOwnerDeletion,
+		}
+		evs = append(evs, n.buildEvidence(ObservationOwnershipReference, subject, ownerData))
+	}
+
+	return evs
+}
+
 // NormalizeService produces evidence for a Service.
 func (n *Normalizer) NormalizeService(svc *Service) []*corev1.Evidence {
 	subject := BuildIdentity(n.clusterID, TypeService, svc.ObjectMeta.Namespace, svc.ObjectMeta.Name)

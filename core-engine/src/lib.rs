@@ -33,7 +33,8 @@ pub use answer::{
     ImpactPath, ImpactSummary,
 };
 pub use discovery::{
-    DiscoveredRelationship, DiscoveryEngine, DiscoveryResult, DiscoveryRule, RuntimeConnectionRule,
+    DiscoveredRelationship, DiscoveryEngine, DiscoveryResult, DiscoveryRule, OwnershipRule,
+    ResourceReferenceRule, RuntimeConnectionRule,
 };
 pub use evidence::{CollectorId, Evidence, EvidenceId, EvidenceSource, ObservationType};
 pub use graph::Graph;

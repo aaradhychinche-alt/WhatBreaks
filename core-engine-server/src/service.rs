@@ -24,9 +24,9 @@ impl DiscoveryServiceImpl {
         Self { engine }
     }
 
-    /// Create a `DiscoveryServiceImpl` with the default v1 rule set.
+    /// Create a `DiscoveryServiceImpl` with the default rule set.
     pub fn with_default_engine() -> Self {
-        Self::new(Arc::new(DiscoveryEngine::default_v1()))
+        Self::new(Arc::new(DiscoveryEngine::default_v2()))
     }
 
     /// Return a reference to the inner `DiscoveryEngine`.

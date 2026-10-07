@@ -49,13 +49,13 @@
 //! [`EvidenceId`]: crate::evidence::EvidenceId
 //! [`Relationship`]: crate::relationship::Relationship
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::evidence::{Evidence, EvidenceId, ObservationType};
 use crate::relationship::{Relationship, RelationshipKind};
-use crate::resource::ResourceIdentity;
+use crate::resource::{Provider, ResourceIdentity, ResourceKind};
 
 // ---------------------------------------------------------------------------
 // DiscoveredRelationship
@@ -360,6 +360,345 @@ impl DiscoveryRule for RuntimeConnectionRule {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Helper to extract and validate a [`ResourceIdentity`] from a JSON object.
+fn parse_resource_identity(val: &serde_json::Value) -> Result<ResourceIdentity, String> {
+    let obj = val
+        .as_object()
+        .ok_or_else(|| "expected JSON object for resource identity".to_string())?;
+
+    let provider_str = obj
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing or non-string 'provider'".to_string())?;
+    if provider_str.trim().is_empty() {
+        return Err("empty 'provider'".to_string());
+    }
+
+    let type_str = obj
+        .get("resource_type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing or non-string 'resource_type'".to_string())?;
+    if type_str.trim().is_empty() {
+        return Err("empty 'resource_type'".to_string());
+    }
+
+    let id_str = obj
+        .get("provider_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing or non-string 'provider_id'".to_string())?;
+    if id_str.trim().is_empty() {
+        return Err("empty 'provider_id'".to_string());
+    }
+
+    Ok(ResourceIdentity::new(
+        Provider::new(provider_str),
+        ResourceKind::new(type_str),
+        id_str,
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// OwnershipRule
+// ---------------------------------------------------------------------------
+
+/// Derives `owner --OWNS--> subject` (and transitive owner chains) from
+/// [`ObservationType::OWNERSHIP_REFERENCE`] observations.
+///
+/// # Semantics
+///
+/// 1. An observation with `observation_type == OWNERSHIP_REFERENCE` expresses an ownership
+///    claim where `ev.subject` is the owned child and `ev.data.owner` is the parent owner.
+/// 2. If `ev.data` is missing an "owner" field or owner is null, the outcome is `Insufficient`.
+/// 3. If `ev.data.owner` is malformed (not a valid object or missing required identity fields),
+///    the outcome is `Invalid`.
+/// 4. If a resource has multiple conflicting controller owners (more than one distinct owner
+///    claiming `controller: true`), the outcome is `Conflict`.
+/// 5. Valid observations derive a direct [`RelationshipKind::OWNS`] relationship:
+///    `owner --OWNS--> subject`, backed by the observation's [`EvidenceId`].
+/// 6. When an owner is itself owned by an ancestor controller (e.g. Deployment -> ReplicaSet -> Pod),
+///    the rule transitively derives the root-level ownership `ancestor --OWNS--> subject`,
+///    backed by all supporting evidence IDs along the controller chain.
+pub struct OwnershipRule;
+
+impl DiscoveryRule for OwnershipRule {
+    fn name(&self) -> &str {
+        "OwnershipRule"
+    }
+
+    fn apply(&self, evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+        let ownership_evidences: Vec<&Evidence> = evidence
+            .iter()
+            .filter(|e| e.observation_type == ObservationType::OWNERSHIP_REFERENCE)
+            .collect();
+
+        if ownership_evidences.is_empty() {
+            return vec![];
+        }
+
+        let mut results: Vec<DiscoveryResult> = Vec::new();
+
+        // child -> Vec<(owner, evidence_id, is_controller)>
+        let mut child_to_owners: HashMap<
+            ResourceIdentity,
+            Vec<(ResourceIdentity, EvidenceId, bool)>,
+        > = HashMap::new();
+
+        for ev in &ownership_evidences {
+            let Some(owner_val) = ev.data.get("owner") else {
+                results.push(DiscoveryResult::Insufficient);
+                continue;
+            };
+
+            if owner_val.is_null() {
+                results.push(DiscoveryResult::Insufficient);
+                continue;
+            }
+
+            let owner_identity = match parse_resource_identity(owner_val) {
+                Ok(id) => id,
+                Err(err) => {
+                    results.push(DiscoveryResult::Invalid {
+                        description: format!(
+                            "OWNERSHIP_REFERENCE evidence {} has malformed 'owner': {}",
+                            ev.id, err
+                        ),
+                    });
+                    continue;
+                }
+            };
+
+            let is_controller = ev
+                .data
+                .get("controller")
+                .and_then(|c| c.as_bool())
+                .unwrap_or(false);
+
+            child_to_owners
+                .entry(ev.subject.clone())
+                .or_default()
+                .push((owner_identity, ev.id, is_controller));
+        }
+
+        // Check for conflicting controller owners for each child.
+        let mut conflicted_children: HashSet<ResourceIdentity> = HashSet::new();
+        for (child, owners) in &child_to_owners {
+            let mut controller_owners: Vec<&ResourceIdentity> = Vec::new();
+            for (owner, _, is_controller) in owners {
+                if *is_controller && !controller_owners.contains(&owner) {
+                    controller_owners.push(owner);
+                }
+            }
+            if controller_owners.len() > 1 {
+                conflicted_children.insert(child.clone());
+                let owner_strs: Vec<String> =
+                    controller_owners.iter().map(|o| o.to_string()).collect();
+                results.push(DiscoveryResult::Conflict {
+                    description: format!(
+                        "Resource {} has multiple conflicting controller owners: {}",
+                        child,
+                        owner_strs.join(", ")
+                    ),
+                });
+            }
+        }
+
+        // Collect discovered relationships: (source, target) -> HashSet<EvidenceId>
+        let mut discovered_rels: HashMap<
+            (ResourceIdentity, ResourceIdentity),
+            HashSet<EvidenceId>,
+        > = HashMap::new();
+
+        // 1. Direct ownership relationships
+        for (child, owners) in &child_to_owners {
+            if conflicted_children.contains(child) {
+                continue;
+            }
+            for (owner, ev_id, _) in owners {
+                discovered_rels
+                    .entry((owner.clone(), child.clone()))
+                    .or_default()
+                    .insert(*ev_id);
+            }
+        }
+
+        // 2. Transitive / Controller chain ownership (e.g. Deployment -> ReplicaSet -> Pod)
+        for child in child_to_owners.keys() {
+            if conflicted_children.contains(child) {
+                continue;
+            }
+
+            let mut visited: HashSet<ResourceIdentity> = HashSet::new();
+            visited.insert(child.clone());
+
+            let mut current_ancestors: Vec<(ResourceIdentity, Vec<EvidenceId>)> = Vec::new();
+            if let Some(immediate_owners) = child_to_owners.get(child) {
+                for (owner, ev_id, _) in immediate_owners {
+                    current_ancestors.push((owner.clone(), vec![*ev_id]));
+                }
+            }
+
+            while !current_ancestors.is_empty() {
+                let mut next_ancestors = Vec::new();
+                for (ancestor, path_evs) in current_ancestors {
+                    if !visited.insert(ancestor.clone()) {
+                        // Cycle detected along chain; stop walking this path
+                        continue;
+                    }
+
+                    if let Some(higher_owners) = child_to_owners.get(&ancestor) {
+                        if !conflicted_children.contains(&ancestor) {
+                            for (higher_owner, higher_ev_id, _) in higher_owners {
+                                let mut combined_evs = path_evs.clone();
+                                combined_evs.push(*higher_ev_id);
+
+                                let ev_set = discovered_rels
+                                    .entry((higher_owner.clone(), child.clone()))
+                                    .or_default();
+                                for id in &combined_evs {
+                                    ev_set.insert(*id);
+                                }
+
+                                next_ancestors.push((higher_owner.clone(), combined_evs));
+                            }
+                        }
+                    }
+                }
+                current_ancestors = next_ancestors;
+            }
+        }
+
+        // Deterministic sorting of discovered relationships
+        let mut sorted_rel_keys: Vec<(ResourceIdentity, ResourceIdentity)> =
+            discovered_rels.keys().cloned().collect();
+        sorted_rel_keys.sort_by(|(s1, t1), (s2, t2)| {
+            s1.to_string()
+                .cmp(&s2.to_string())
+                .then_with(|| t1.to_string().cmp(&t2.to_string()))
+        });
+
+        for key in sorted_rel_keys {
+            if let Some(ev_ids) = discovered_rels.remove(&key) {
+                let (source, target) = key;
+                let rel = Relationship::new(source, target, RelationshipKind::OWNS);
+                let mut ev_vec: Vec<EvidenceId> = ev_ids.into_iter().collect();
+                ev_vec.sort_by_key(|a| a.as_uuid());
+                results.push(DiscoveryResult::Discovered(DiscoveredRelationship::new(
+                    rel, ev_vec,
+                )));
+            }
+        }
+
+        results
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ResourceReferenceRule
+// ---------------------------------------------------------------------------
+
+/// Derives `subject --DEPENDS_ON--> target` from [`ObservationType::RESOURCE_REFERENCE`]
+/// observations that explicitly target another resource by identity.
+///
+/// # Invariants
+///
+/// 1. An observation with `observation_type == RESOURCE_REFERENCE` that references a target
+///    resource (e.g. ConfigMap, Secret, ServiceAccount, or Service backend) derives:
+///    `subject --DEPENDS_ON--> target`.
+/// 2. Pure network endpoint observations (e.g. `reference_type == "service_endpoint"` or
+///    with `address` and no `target`) are excluded (handled by [`RuntimeConnectionRule`]).
+/// 3. If "target" is missing or null, the outcome is `Insufficient`.
+/// 4. If "target" is malformed, the outcome is `Invalid`.
+/// 5. Supporting evidence IDs are attached to each discovered relationship.
+pub struct ResourceReferenceRule;
+
+impl DiscoveryRule for ResourceReferenceRule {
+    fn name(&self) -> &str {
+        "ResourceReferenceRule"
+    }
+
+    fn apply(&self, evidence: &[Evidence]) -> Vec<DiscoveryResult> {
+        let reference_evidences: Vec<&Evidence> = evidence
+            .iter()
+            .filter(|e| e.observation_type == ObservationType::RESOURCE_REFERENCE)
+            .collect();
+
+        if reference_evidences.is_empty() {
+            return vec![];
+        }
+
+        let mut results: Vec<DiscoveryResult> = Vec::new();
+        let mut discovered_rels: HashMap<
+            (ResourceIdentity, ResourceIdentity),
+            HashSet<EvidenceId>,
+        > = HashMap::new();
+
+        for ev in &reference_evidences {
+            // Skip pure network endpoint mappings intended for RuntimeConnectionRule
+            if let Some(ref_type) = ev.data.get("reference_type").and_then(|v| v.as_str()) {
+                if ref_type == "service_endpoint" || ref_type == "node_address" {
+                    continue;
+                }
+            } else if ev.data.get("address").is_some() && ev.data.get("target").is_none() {
+                continue;
+            }
+
+            let Some(target_val) = ev.data.get("target") else {
+                results.push(DiscoveryResult::Insufficient);
+                continue;
+            };
+
+            if target_val.is_null() {
+                results.push(DiscoveryResult::Insufficient);
+                continue;
+            }
+
+            let target_identity = match parse_resource_identity(target_val) {
+                Ok(id) => id,
+                Err(err) => {
+                    results.push(DiscoveryResult::Invalid {
+                        description: format!(
+                            "RESOURCE_REFERENCE evidence {} has malformed 'target': {}",
+                            ev.id, err
+                        ),
+                    });
+                    continue;
+                }
+            };
+
+            discovered_rels
+                .entry((ev.subject.clone(), target_identity))
+                .or_default()
+                .insert(ev.id);
+        }
+
+        let mut sorted_rel_keys: Vec<(ResourceIdentity, ResourceIdentity)> =
+            discovered_rels.keys().cloned().collect();
+        sorted_rel_keys.sort_by(|(s1, t1), (s2, t2)| {
+            s1.to_string()
+                .cmp(&s2.to_string())
+                .then_with(|| t1.to_string().cmp(&t2.to_string()))
+        });
+
+        for key in sorted_rel_keys {
+            if let Some(ev_ids) = discovered_rels.remove(&key) {
+                let (source, target) = key;
+                let rel = Relationship::new(source, target, RelationshipKind::DEPENDS_ON);
+                let mut ev_vec: Vec<EvidenceId> = ev_ids.into_iter().collect();
+                ev_vec.sort_by_key(|a| a.as_uuid());
+                results.push(DiscoveryResult::Discovered(DiscoveredRelationship::new(
+                    rel, ev_vec,
+                )));
+            }
+        }
+
+        results
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DiscoveryEngine
 // ---------------------------------------------------------------------------
 
@@ -380,7 +719,7 @@ impl DiscoveryRule for RuntimeConnectionRule {
 /// # Usage
 ///
 /// ```rust,ignore
-/// let engine = DiscoveryEngine::new(vec![Box::new(RuntimeConnectionRule)]);
+/// let engine = DiscoveryEngine::default_v2();
 /// let results = engine.run(&evidence_slice);
 /// ```
 ///
@@ -404,6 +743,17 @@ impl DiscoveryEngine {
     /// v1 rules: [`RuntimeConnectionRule`].
     pub fn default_v1() -> Self {
         Self::new(vec![Box::new(RuntimeConnectionRule)])
+    }
+
+    /// Create a `DiscoveryEngine` pre-loaded with the default v2 rule set.
+    ///
+    /// v2 rules: [`RuntimeConnectionRule`], [`OwnershipRule`], [`ResourceReferenceRule`].
+    pub fn default_v2() -> Self {
+        Self::new(vec![
+            Box::new(RuntimeConnectionRule),
+            Box::new(OwnershipRule),
+            Box::new(ResourceReferenceRule),
+        ])
     }
 
     /// Return the number of rules registered in this engine.
@@ -431,7 +781,7 @@ impl DiscoveryEngine {
 
 impl Default for DiscoveryEngine {
     fn default() -> Self {
-        Self::default_v1()
+        Self::default_v2()
     }
 }
 
@@ -1340,5 +1690,455 @@ mod tests {
 
         assert_eq!(*captured_1.lock().unwrap(), expected_ids);
         assert_eq!(*captured_2.lock().unwrap(), expected_ids);
+    }
+
+    // -----------------------------------------------------------------------
+    // 27. OwnershipRule: valid owner reference -> Discovered
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_ownership_valid_owner_reference_discovered() {
+        let dep = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("deployment"),
+            "payments/web-deploy",
+        );
+        let pod = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("pod"),
+            "payments/web-pod-xyz",
+        );
+
+        let ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            pod.clone(),
+            json!({
+                "owner": {
+                    "provider": "kubernetes",
+                    "resource_type": "deployment",
+                    "provider_id": "payments/web-deploy"
+                },
+                "controller": true
+            }),
+        );
+
+        let rule = OwnershipRule;
+        let results = rule.apply(std::slice::from_ref(&ev));
+
+        assert_eq!(results.len(), 1);
+        let disc = results[0].discovered().expect("expected Discovered result");
+        assert_eq!(disc.relationship.source, dep);
+        assert_eq!(disc.relationship.target, pod);
+        assert_eq!(disc.relationship.kind, RelationshipKind::OWNS);
+        assert_eq!(disc.supporting_evidence, vec![ev.id]);
+    }
+
+    // -----------------------------------------------------------------------
+    // 28. OwnershipRule: transitive controller chain (Deployment -> ReplicaSet -> Pod)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_ownership_transitive_controller_chain() {
+        let dep = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("deployment"),
+            "payments/web-deploy",
+        );
+        let rs = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("replicaset"),
+            "payments/web-rs-123",
+        );
+        let pod = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("pod"),
+            "payments/web-pod-xyz",
+        );
+
+        let ev_rs = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            rs.clone(),
+            json!({
+                "owner": {
+                    "provider": "kubernetes",
+                    "resource_type": "deployment",
+                    "provider_id": "payments/web-deploy"
+                },
+                "controller": true
+            }),
+        );
+
+        let ev_pod = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            pod.clone(),
+            json!({
+                "owner": {
+                    "provider": "kubernetes",
+                    "resource_type": "replicaset",
+                    "provider_id": "payments/web-rs-123"
+                },
+                "controller": true
+            }),
+        );
+
+        let rule = OwnershipRule;
+        let results = rule.apply(&[ev_rs.clone(), ev_pod.clone()]);
+
+        // Expected 3 relationships:
+        // 1. dep OWNS rs (ev_rs)
+        // 2. dep OWNS pod (ev_rs, ev_pod)
+        // 3. rs OWNS pod (ev_pod)
+        assert_eq!(results.len(), 3);
+
+        let rels: Vec<_> = results.iter().map(|r| r.discovered().unwrap()).collect();
+
+        // 1. dep OWNS pod
+        let dep_pod = rels
+            .iter()
+            .find(|d| d.relationship.source == dep && d.relationship.target == pod)
+            .expect("expected dep OWNS pod");
+        assert_eq!(dep_pod.relationship.kind, RelationshipKind::OWNS);
+        let mut expected_evs = vec![ev_rs.id, ev_pod.id];
+        expected_evs.sort_by_key(|a| a.as_uuid());
+        assert_eq!(dep_pod.supporting_evidence, expected_evs);
+
+        // 2. dep OWNS rs
+        let dep_rs = rels
+            .iter()
+            .find(|d| d.relationship.source == dep && d.relationship.target == rs)
+            .expect("expected dep OWNS rs");
+        assert_eq!(dep_rs.supporting_evidence, vec![ev_rs.id]);
+
+        // 3. rs OWNS pod
+        let rs_pod = rels
+            .iter()
+            .find(|d| d.relationship.source == rs && d.relationship.target == pod)
+            .expect("expected rs OWNS pod");
+        assert_eq!(rs_pod.supporting_evidence, vec![ev_pod.id]);
+    }
+
+    // -----------------------------------------------------------------------
+    // 29. OwnershipRule: missing owner metadata -> Insufficient
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_ownership_missing_owner_insufficient() {
+        let pod = pod_identity("payments-api");
+        let ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            pod,
+            json!({ "controller": true }), // no "owner" key
+        );
+
+        let rule = OwnershipRule;
+        let results = rule.apply(&[ev]);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_insufficient());
+    }
+
+    // -----------------------------------------------------------------------
+    // 30. OwnershipRule: malformed owner metadata -> Invalid
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_ownership_malformed_owner_invalid() {
+        let pod = pod_identity("payments-api");
+        let ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            pod,
+            json!({ "owner": "string-instead-of-object" }),
+        );
+
+        let rule = OwnershipRule;
+        let results = rule.apply(&[ev]);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_invalid());
+    }
+
+    // -----------------------------------------------------------------------
+    // 31. OwnershipRule: conflicting controller owners -> Conflict
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_ownership_conflicting_controller_owners() {
+        let pod = pod_identity("payments-api");
+        let ev1 = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            pod.clone(),
+            json!({
+                "owner": {
+                    "provider": "kubernetes",
+                    "resource_type": "deployment",
+                    "provider_id": "payments/deploy-1"
+                },
+                "controller": true
+            }),
+        );
+        let ev2 = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            pod,
+            json!({
+                "owner": {
+                    "provider": "kubernetes",
+                    "resource_type": "deployment",
+                    "provider_id": "payments/deploy-2"
+                },
+                "controller": true
+            }),
+        );
+
+        let rule = OwnershipRule;
+        let results = rule.apply(&[ev1, ev2]);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_conflict());
+    }
+
+    // -----------------------------------------------------------------------
+    // 32. OwnershipRule: deterministic output
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_ownership_deterministic_output() {
+        let rs = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("replicaset"),
+            "payments/web-rs-123",
+        );
+        let pod = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("pod"),
+            "payments/web-pod-xyz",
+        );
+
+        let ev_rs = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            rs,
+            json!({
+                "owner": {
+                    "provider": "kubernetes",
+                    "resource_type": "deployment",
+                    "provider_id": "payments/web-deploy"
+                },
+                "controller": true
+            }),
+        );
+        let ev_pod = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            pod,
+            json!({
+                "owner": {
+                    "provider": "kubernetes",
+                    "resource_type": "replicaset",
+                    "provider_id": "payments/web-rs-123"
+                },
+                "controller": true
+            }),
+        );
+
+        let rule = OwnershipRule;
+        let run1 = rule.apply(&[ev_rs.clone(), ev_pod.clone()]);
+        let run2 = rule.apply(&[ev_pod, ev_rs]);
+
+        assert_eq!(run1, run2);
+    }
+
+    // -----------------------------------------------------------------------
+    // 33. ResourceReferenceRule: valid reference -> Discovered
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resource_reference_valid_discovered() {
+        let dep = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("deployment"),
+            "payments/web-deploy",
+        );
+        let cm = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("configmap"),
+            "payments/app-config",
+        );
+
+        let ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            dep.clone(),
+            json!({
+                "reference_type": "config_map_ref",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "configmap",
+                    "provider_id": "payments/app-config"
+                }
+            }),
+        );
+
+        let rule = ResourceReferenceRule;
+        let results = rule.apply(std::slice::from_ref(&ev));
+
+        assert_eq!(results.len(), 1);
+        let disc = results[0].discovered().expect("expected Discovered result");
+        assert_eq!(disc.relationship.source, dep);
+        assert_eq!(disc.relationship.target, cm);
+        assert_eq!(disc.relationship.kind, RelationshipKind::DEPENDS_ON);
+        assert_eq!(disc.supporting_evidence, vec![ev.id]);
+    }
+
+    // -----------------------------------------------------------------------
+    // 34. ResourceReferenceRule: missing target -> Insufficient
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resource_reference_missing_target_insufficient() {
+        let dep = pod_identity("web-deploy");
+        let ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            dep,
+            json!({ "reference_type": "config_map_ref" }), // missing "target"
+        );
+
+        let rule = ResourceReferenceRule;
+        let results = rule.apply(&[ev]);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_insufficient());
+    }
+
+    // -----------------------------------------------------------------------
+    // 35. ResourceReferenceRule: malformed target -> Invalid
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resource_reference_malformed_target_invalid() {
+        let dep = pod_identity("web-deploy");
+        let ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            dep,
+            json!({ "target": 12345 }),
+        );
+
+        let rule = ResourceReferenceRule;
+        let results = rule.apply(&[ev]);
+
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_invalid());
+    }
+
+    // -----------------------------------------------------------------------
+    // 36. ResourceReferenceRule: endpoint mappings skipped
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resource_reference_skips_endpoint_mappings() {
+        let svc = pod_identity("web-svc");
+        let ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            svc,
+            json!({
+                "address": "10.0.0.1",
+                "port": 80,
+                "reference_type": "service_endpoint"
+            }),
+        );
+
+        let rule = ResourceReferenceRule;
+        let results = rule.apply(&[ev]);
+
+        // Pure endpoint mappings must be skipped by ResourceReferenceRule
+        assert!(results.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // 37. DiscoveryEngine::default_v2 coordinates all rules
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_discovery_engine_default_v2_runs_all_rules() {
+        let engine = DiscoveryEngine::default_v2();
+        assert_eq!(engine.rule_count(), 3);
+
+        let pod = pod_identity("payments-api");
+        let db = db_identity("payments-db");
+        let dep = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("deployment"),
+            "payments/web-deploy",
+        );
+        let cm = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("configmap"),
+            "payments/app-config",
+        );
+
+        // 1. Runtime connection evidence
+        let conn = connection_evidence(pod.clone(), "10.0.2.15", 5432);
+        let map = mapping_evidence(db.clone(), "10.0.2.15", 5432);
+
+        // 2. Ownership evidence
+        let owner_ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::OWNERSHIP_REFERENCE,
+            pod.clone(),
+            json!({
+                "owner": {
+                    "provider": "kubernetes",
+                    "resource_type": "deployment",
+                    "provider_id": "payments/web-deploy"
+                },
+                "controller": true
+            }),
+        );
+
+        // 3. Resource reference evidence
+        let ref_ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            dep.clone(),
+            json!({
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "configmap",
+                    "provider_id": "payments/app-config"
+                }
+            }),
+        );
+
+        let results = engine.run(&[conn, map, owner_ev, ref_ev]);
+
+        // Expected:
+        // - RuntimeConnectionRule: pod -> db (DEPENDS_ON)
+        // - OwnershipRule: dep -> pod (OWNS)
+        // - ResourceReferenceRule: dep -> cm (DEPENDS_ON)
+        assert_eq!(results.len(), 3);
+
+        let rels: Vec<_> = results.iter().map(|r| r.discovered().unwrap()).collect();
+        assert!(rels.iter().any(|d| d.relationship.source == pod
+            && d.relationship.target == db
+            && d.relationship.kind == RelationshipKind::DEPENDS_ON));
+        assert!(rels.iter().any(|d| d.relationship.source == dep
+            && d.relationship.target == pod
+            && d.relationship.kind == RelationshipKind::OWNS));
+        assert!(rels.iter().any(|d| d.relationship.source == dep
+            && d.relationship.target == cm
+            && d.relationship.kind == RelationshipKind::DEPENDS_ON));
     }
 }
