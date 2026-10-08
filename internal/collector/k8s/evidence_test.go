@@ -298,4 +298,3 @@ func TestNormalizer_ReplicaSet(t *testing.T) {
 		t.Errorf("missing ownership reference evidence in ReplicaSet normalization")
 	}
 }
-

@@ -100,8 +100,21 @@ type AssembledState struct {
 	Provenance    map[RelationshipKey][]string `json:"provenance"`
 }
 
+// ScopeBoundary represents an optional authoritative scope declaration (e.g., a specific cluster or namespace inventory).
+// In v1, WhatBreaks does NOT infer deletion from observation absence within a scope boundary
+// because collectors do not provide authoritative deletion guarantees. This structure establishes
+// the contract for future completeness-aware reconciliation.
+type ScopeBoundary struct {
+	Provider  string            `json:"provider"`
+	ScopeType string            `json:"scope_type,omitempty"` // e.g., "namespace", "cluster", "account"
+	ScopeID   string            `json:"scope_id,omitempty"`   // e.g., "default", "production"
+	Complete  bool              `json:"complete"`             // whether this sweep asserts authoritative completeness
+	Metadata  map[string]string `json:"metadata,omitempty"`
+}
+
 // ObservationBatch packages normalized evidence records for ingestion into a specific workspace.
 type ObservationBatch struct {
 	WorkspaceID string             `json:"workspace_id"`
 	Evidence    []*corev1.Evidence `json:"evidence"`
+	Scope       *ScopeBoundary     `json:"scope,omitempty"`
 }

@@ -376,3 +376,159 @@ func TestEndToEnd_CollectorObservationToAnswerEngine(t *testing.T) {
 		t.Errorf("expected Workspace B to have 0 evidence, got %d", len(ansB.Evidence))
 	}
 }
+
+// ---------------------------------------------------------------------------
+// RECONCILER LIFECYCLE & MATERIALIZATION ACCEPTANCE TEST
+// ---------------------------------------------------------------------------
+
+func TestReconciler_MaterializationLifecycle(t *testing.T) {
+	client := startProdServer(t)
+	store := state.NewMemoryStore()
+	logger := logging.NewJSONLogger(nil, logging.LevelInfo, "reconciler-lifecycle-test")
+
+	materializer := state.NewMaterializer(store, client, logger)
+	reconciler := state.NewReconciler(store, client, materializer, logger)
+	ctx := context.Background()
+
+	ws := "ws-rec-lifecycle"
+	answerSvc := answer.NewService(client, logger)
+
+	targetDB := &answer.ResourceIdentity{
+		Provider:     "aws",
+		ResourceType: "rds",
+		ProviderID:   "arn:aws:rds:us-east-1:123:orders-db",
+	}
+
+	// Step 1: Initial Sweep — orders-service connects to orders-db
+	ordersSubj := &corev1.ResourceIdentity{
+		Provider:     "kubernetes",
+		ResourceType: "pod",
+		ProviderId:   "default/orders-service",
+	}
+	dbSubj := &corev1.ResourceIdentity{
+		Provider:     "aws",
+		ResourceType: "rds",
+		ProviderId:   "arn:aws:rds:us-east-1:123:orders-db",
+	}
+	gatewaySubj := &corev1.ResourceIdentity{
+		Provider:     "kubernetes",
+		ResourceType: "pod",
+		ProviderId:   "default/web-gateway",
+	}
+
+	conn1 := makeConnectionEvidence("550e8400-e29b-41d4-a716-446655440051", ordersSubj, "10.0.1.5", 5432)
+	map1 := makeMappingEvidence("550e8400-e29b-41d4-a716-446655440052", dbSubj, "10.0.1.5", 5432)
+
+	batch1 := state.ObservationBatch{
+		WorkspaceID: ws,
+		Evidence:    []*corev1.Evidence{conn1, map1},
+	}
+
+	res1, err := reconciler.ReconcileAndMaterialize(ctx, batch1)
+	if err != nil {
+		t.Fatalf("Cycle 1 ReconcileAndMaterialize failed: %v", err)
+	}
+	if res1.ResourcesCreated != 2 {
+		t.Errorf("expected 2 resources created in cycle 1, got %d", res1.ResourcesCreated)
+	}
+	if res1.RelationshipsCreated != 1 {
+		t.Errorf("expected 1 relationship created in cycle 1, got %d", res1.RelationshipsCreated)
+	}
+
+	// Verify Rust Engine impact for Target orders-db
+	ans1, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: ws,
+		Target:      targetDB,
+		Direction:   "incoming",
+		MaxDepth:    5,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact failed on cycle 1: %v", err)
+	}
+	if ans1.Summary.ImpactedCount != 1 {
+		t.Fatalf("expected 1 impacted resource (orders-service), got %d", ans1.Summary.ImpactedCount)
+	}
+
+	// Step 2: Partial Observation Gap — collector temporarily observes unrelated resource
+	// Neither orders-service nor orders-db are present in this batch.
+	unrelatedEv := &corev1.Evidence{
+		Id: "550e8400-e29b-41d4-a716-446655440053",
+		Source: &corev1.EvidenceSource{
+			Provider:  "kubernetes",
+			Collector: "k8s-runtime",
+		},
+		ObservedAt:      "2026-10-06T12:05:00Z",
+		ObservationType: "CONTROL_PLANE_OBJECT",
+		Subject: &corev1.ResourceIdentity{
+			Provider:     "kubernetes",
+			ResourceType: "pod",
+			ProviderId:   "kube-system/kube-dns",
+		},
+		Data: []byte(`{"status": "running"}`),
+	}
+
+	batch2 := state.ObservationBatch{
+		WorkspaceID: ws,
+		Evidence:    []*corev1.Evidence{unrelatedEv},
+	}
+
+	res2, err := reconciler.ReconcileAndMaterialize(ctx, batch2)
+	if err != nil {
+		t.Fatalf("Cycle 2 ReconcileAndMaterialize failed: %v", err)
+	}
+	if res2.ResourcesCreated != 1 {
+		t.Errorf("expected 1 new resource created (kube-dns), got %d", res2.ResourcesCreated)
+	}
+	// Total resources must now be 3 (orders-service, orders-db, kube-dns)
+	if res2.ResourcesTotal != 3 {
+		t.Errorf("expected 3 total resources preserved, got %d", res2.ResourcesTotal)
+	}
+
+	// Invariant Check: Target impact on orders-db must NOT be degraded or deleted!
+	ans2, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: ws,
+		Target:      targetDB,
+		Direction:   "incoming",
+		MaxDepth:    5,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact failed on cycle 2: %v", err)
+	}
+	if ans2.Summary.ImpactedCount != 1 {
+		t.Fatalf("CRITICAL REGRESSION: temporary gap caused state deletion! expected 1 impacted resource, got %d", ans2.Summary.ImpactedCount)
+	}
+
+	// Step 3: Expansion — add web-gateway -> orders-service dependency
+	conn3 := makeConnectionEvidence("550e8400-e29b-41d4-a716-446655440054", gatewaySubj, "10.0.1.20", 8080)
+	map3 := makeMappingEvidence("550e8400-e29b-41d4-a716-446655440055", ordersSubj, "10.0.1.20", 8080)
+
+	batch3 := state.ObservationBatch{
+		WorkspaceID: ws,
+		Evidence:    []*corev1.Evidence{conn3, map3},
+	}
+
+	res3, err := reconciler.ReconcileAndMaterialize(ctx, batch3)
+	if err != nil {
+		t.Fatalf("Cycle 3 ReconcileAndMaterialize failed: %v", err)
+	}
+	if res3.RelationshipsCreated != 1 {
+		t.Errorf("expected 1 new relationship created (web-gateway -> orders-service), got %d", res3.RelationshipsCreated)
+	}
+
+	// Query Rust Engine for orders-db: should now reach BOTH orders-service (direct) AND web-gateway (indirect)!
+	ans3, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: ws,
+		Target:      targetDB,
+		Direction:   "incoming",
+		MaxDepth:    5,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact failed on cycle 3: %v", err)
+	}
+	if ans3.Summary.ImpactedCount != 2 {
+		t.Fatalf("expected 2 impacted resources after expansion, got %d", ans3.Summary.ImpactedCount)
+	}
+	if ans3.Summary.DirectCount != 1 || ans3.Summary.IndirectCount != 1 {
+		t.Errorf("expected 1 direct, 1 indirect; got direct=%d indirect=%d", ans3.Summary.DirectCount, ans3.Summary.IndirectCount)
+	}
+}

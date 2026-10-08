@@ -721,3 +721,175 @@ func TestKubernetes_RealEndToEndFlow(t *testing.T) {
 
 	t.Logf("Real Kubernetes End-to-End flow verified successfully with DEPENDS_ON non-zero blast radius, control-plane ownership, and ZERO fake data.")
 }
+
+// ---------------------------------------------------------------------------
+// Real Kubernetes Acceptance Test: Reconciliation & Lifecycle
+// ---------------------------------------------------------------------------
+
+func TestRealKubernetes_ReconciliationLifecycle(t *testing.T) {
+	// 1. Prerequisites: kubectl proxy & PostgreSQL
+	proxyURL, stopProxy := startKubectlProxy(t)
+	defer stopProxy()
+
+	dbCfg := getTestDatabaseConfig(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	logger := logging.NewJSONLogger(nil, logging.LevelInfo, "k8s-rec-acceptance")
+
+	db, err := database.New(ctx, dbCfg, database.WithLogger(logger))
+	if err != nil {
+		t.Skipf("Failed to initialize database pool: %v; skipping", err)
+	}
+	defer db.Close()
+
+	if err := db.Ping(ctx); err != nil {
+		t.Skipf("PostgreSQL Ping failed: %v; skipping", err)
+	}
+
+	if err := state.EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("state.EnsureSchema failed: %v", err)
+	}
+
+	addr, err := allocateFreeAddr()
+	if err != nil {
+		t.Fatalf("failed to allocate free address: %v", err)
+	}
+	server := startManagedServer(t, addr)
+	defer server.Stop()
+
+	coreClient, err := coreclient.Connect(ctx, addr)
+	if err != nil {
+		t.Fatalf("failed to connect to Rust core engine: %v", err)
+	}
+	defer coreClient.Close()
+	pgStore := state.NewPostgresStore(db)
+
+	workspaceID := "k8s-rec-lifecycle-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	_ = pgStore.DeleteWorkspaceState(ctx, workspaceID)
+	defer func() {
+		_ = pgStore.DeleteWorkspaceState(ctx, workspaceID)
+	}()
+
+	clusterID := "k8s-rec-cluster"
+	testNamespace := "whatbreaks-test"
+
+	k8sClient, err := k8s.NewRESTClient(k8s.ClientConfig{
+		BaseURL: proxyURL,
+		Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("failed to initialize k8s REST client: %v", err)
+	}
+
+	collector, err := k8s.New(
+		k8s.WithClient(k8sClient),
+		k8s.WithClusterID(clusterID),
+		k8s.WithWorkspaceID(workspaceID),
+		k8s.WithNamespaces(testNamespace),
+		k8s.WithClusterWide(true),
+	)
+	if err != nil {
+		t.Fatalf("failed to initialize k8s collector: %v", err)
+	}
+
+	materializer := state.NewMaterializer(pgStore, coreClient, logger)
+	reconciler := state.NewReconciler(pgStore, coreClient, materializer, logger)
+
+	// Step 1: Initial Sweep — creates state in PostgreSQL
+	evidence1, err := collector.Collect(ctx)
+	if err != nil {
+		t.Fatalf("collector.Collect sweep 1 failed: %v", err)
+	}
+	if len(evidence1) == 0 {
+		t.Fatalf("expected evidence from sweep 1, got 0")
+	}
+
+	batch1 := state.ObservationBatch{
+		WorkspaceID: workspaceID,
+		Evidence:    evidence1,
+	}
+
+	res1, err := reconciler.ReconcileAndMaterialize(ctx, batch1)
+	if err != nil {
+		t.Fatalf("reconciler.ReconcileAndMaterialize sweep 1 failed: %v", err)
+	}
+
+	if res1.ResourcesCreated == 0 {
+		t.Errorf("expected resources created in sweep 1, got 0")
+	}
+	initialResourcesTotal := res1.ResourcesTotal
+	initialRelsTotal := res1.RelationshipsTotal
+	t.Logf("Sweep 1 Complete: created=%d, total_resources=%d, total_relationships=%d, evidence=%d",
+		res1.ResourcesCreated, initialResourcesTotal, initialRelsTotal, res1.EvidenceCount)
+
+	// Step 2: Second Observation Sweep — updates/reconciles state idempotently
+	evidence2, err := collector.Collect(ctx)
+	if err != nil {
+		t.Fatalf("collector.Collect sweep 2 failed: %v", err)
+	}
+
+	batch2 := state.ObservationBatch{
+		WorkspaceID: workspaceID,
+		Evidence:    evidence2,
+	}
+
+	res2, err := reconciler.ReconcileAndMaterialize(ctx, batch2)
+	if err != nil {
+		t.Fatalf("reconciler.ReconcileAndMaterialize sweep 2 failed: %v", err)
+	}
+
+	t.Logf("Sweep 2 Complete: created=%d, updated=%d, total_resources=%d, total_relationships=%d",
+		res2.ResourcesCreated, res2.ResourcesUpdated, res2.ResourcesTotal, res2.RelationshipsTotal)
+
+	// Idempotency check: resources should not double; updated count should reflect seen resources
+	if res2.ResourcesTotal < initialResourcesTotal {
+		t.Errorf("expected total resources >= %d, got %d", initialResourcesTotal, res2.ResourcesTotal)
+	}
+	if res2.ResourcesUpdated == 0 {
+		t.Errorf("expected resources to be updated on second sweep, got 0")
+	}
+
+	// Verify evidence history is preserved immutably in PostgreSQL
+	persistedEvidence, err := pgStore.ListEvidence(ctx, workspaceID)
+	if err != nil {
+		t.Fatalf("pgStore.ListEvidence failed: %v", err)
+	}
+	if len(persistedEvidence) < len(evidence1) {
+		t.Errorf("expected at least %d evidence records preserved, got %d", len(evidence1), len(persistedEvidence))
+	}
+
+	// Step 3: Temporary Observation Gap — partial sweep must NOT delete state
+	// Submit a partial batch containing only the first evidence record
+	partialBatch := state.ObservationBatch{
+		WorkspaceID: workspaceID,
+		Evidence:    evidence2[:1],
+	}
+
+	res3, err := reconciler.ReconcileAndMaterialize(ctx, partialBatch)
+	if err != nil {
+		t.Fatalf("reconciler.ReconcileAndMaterialize partial gap failed: %v", err)
+	}
+
+	// Invariant: Total resources and relationships must remain unchanged
+	if res3.ResourcesTotal != res2.ResourcesTotal {
+		t.Fatalf("CRITICAL REGRESSION: temporary gap deleted resources! expected %d, got %d",
+			res2.ResourcesTotal, res3.ResourcesTotal)
+	}
+	if res3.RelationshipsTotal != res2.RelationshipsTotal {
+		t.Fatalf("CRITICAL REGRESSION: temporary gap deleted relationships! expected %d, got %d",
+			res2.RelationshipsTotal, res3.RelationshipsTotal)
+	}
+
+	// Query store to confirm resources are still intact
+	persistedAfterGap, err := pgStore.ListResources(ctx, workspaceID)
+	if err != nil {
+		t.Fatalf("pgStore.ListResources failed: %v", err)
+	}
+	if len(persistedAfterGap) != res2.ResourcesTotal {
+		t.Fatalf("resources missing in PostgreSQL after gap: expected %d, got %d",
+			res2.ResourcesTotal, len(persistedAfterGap))
+	}
+
+	t.Logf("Reconciliation Lifecycle Acceptance Test passed: state preserved across multiple sweeps and temporary gaps.")
+}

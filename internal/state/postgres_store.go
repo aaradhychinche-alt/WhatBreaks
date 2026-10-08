@@ -224,6 +224,40 @@ func (s *PostgresStore) GetResource(ctx context.Context, workspaceID string, ide
 	return &r, nil
 }
 
+func (s *PostgresStore) GetRelationship(ctx context.Context, workspaceID string, rel RelationshipKey) (*Relationship, error) {
+	ws := strings.TrimSpace(workspaceID)
+	if ws == "" {
+		return nil, ErrInvalidWorkspace
+	}
+
+	query := `
+	SELECT source_provider, source_resource_type, source_provider_id,
+	       target_provider, target_resource_type, target_provider_id,
+	       kind, category, first_observed_at, last_observed_at
+	FROM state_relationships
+	WHERE workspace_id = $1
+	  AND source_provider = $2 AND source_resource_type = $3 AND source_provider_id = $4
+	  AND target_provider = $5 AND target_resource_type = $6 AND target_provider_id = $7
+	  AND kind = $8;
+	`
+	row := s.db.QueryRow(ctx, query, ws,
+		rel.Source.Provider, rel.Source.ResourceType, rel.Source.ProviderID,
+		rel.Target.Provider, rel.Target.ResourceType, rel.Target.ProviderID,
+		rel.Kind)
+
+	var r Relationship
+	r.WorkspaceID = ws
+	err := row.Scan(
+		&r.Source.Provider, &r.Source.ResourceType, &r.Source.ProviderID,
+		&r.Target.Provider, &r.Target.ResourceType, &r.Target.ProviderID,
+		&r.Kind, &r.Category, &r.FirstObservedAt, &r.LastObservedAt,
+	)
+	if err != nil {
+		return nil, ErrRelationshipNotFound
+	}
+	return &r, nil
+}
+
 func (s *PostgresStore) ListResources(ctx context.Context, workspaceID string) ([]Resource, error) {
 	ws := strings.TrimSpace(workspaceID)
 	if ws == "" {

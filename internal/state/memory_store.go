@@ -208,6 +208,27 @@ func (s *MemoryStore) GetResource(ctx context.Context, workspaceID string, ident
 	return &res, nil
 }
 
+func (s *MemoryStore) GetRelationship(ctx context.Context, workspaceID string, rel RelationshipKey) (*Relationship, error) {
+	ws := strings.TrimSpace(workspaceID)
+	if ws == "" {
+		return nil, ErrInvalidWorkspace
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	wsMap, ok := s.relationships[ws]
+	if !ok {
+		return nil, ErrRelationshipNotFound
+	}
+
+	r, found := wsMap[rel.String()]
+	if !found {
+		return nil, ErrRelationshipNotFound
+	}
+	return &r, nil
+}
+
 func (s *MemoryStore) ListResources(ctx context.Context, workspaceID string) ([]Resource, error) {
 	ws := strings.TrimSpace(workspaceID)
 	if ws == "" {

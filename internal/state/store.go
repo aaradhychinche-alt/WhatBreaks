@@ -9,6 +9,9 @@ var (
 	// ErrResourceNotFound is returned when a requested resource is not present.
 	ErrResourceNotFound = errors.New("state store: resource not found")
 
+	// ErrRelationshipNotFound is returned when a requested relationship is not present.
+	ErrRelationshipNotFound = errors.New("state store: relationship not found")
+
 	// ErrInvalidWorkspace is returned when workspace ID is missing or invalid.
 	ErrInvalidWorkspace = errors.New("state store: workspace_id cannot be empty")
 )
@@ -33,6 +36,9 @@ type Store interface {
 
 	// GetResource retrieves a specific resource by identity within the workspace.
 	GetResource(ctx context.Context, workspaceID string, identity ResourceIdentity) (*Resource, error)
+
+	// GetRelationship retrieves a specific relationship by key within the workspace.
+	GetRelationship(ctx context.Context, workspaceID string, rel RelationshipKey) (*Relationship, error)
 
 	// ListResources returns all resources registered in the workspace.
 	ListResources(ctx context.Context, workspaceID string) ([]Resource, error)

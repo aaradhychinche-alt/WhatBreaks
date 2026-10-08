@@ -3,9 +3,6 @@ package state
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
-	"time"
 
 	corev1 "github.com/aaradhychinche-alt/WhatBreaks/gen/go/wb/core/v1"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
@@ -39,7 +36,9 @@ type IngestionResult struct {
 
 // StateAssembler coordinates ingestion of normalized collector observations, resource registration,
 // discovery invocation, relationship/provenance durability, and materialization into Rust Core.
+// It implements Reconciler and provides backward compatibility for Ingest/IngestAndMaterialize.
 type StateAssembler struct {
+	reconciler   Reconciler
 	store        Store
 	discovery    DiscoveryRunner
 	materializer *Materializer
@@ -56,7 +55,9 @@ func NewStateAssembler(
 	if logger == nil {
 		logger = logging.NewJSONLogger(nil, logging.LevelInfo, "state-assembler")
 	}
+	reconciler := NewReconciler(store, discovery, materializer, logger)
 	return &StateAssembler{
+		reconciler:   reconciler,
 		store:        store,
 		discovery:    discovery,
 		materializer: materializer,
@@ -64,273 +65,48 @@ func NewStateAssembler(
 	}
 }
 
-// Ingest processes a batch of normalized evidence observations for workspaceID.
+// Ingest processes a batch of normalized evidence observations for workspaceID using the underlying Reconciler.
 func (a *StateAssembler) Ingest(ctx context.Context, batch ObservationBatch) (*IngestionResult, error) {
-	ws := strings.TrimSpace(batch.WorkspaceID)
-	if ws == "" {
-		return nil, ErrEmptyWorkspace
+	recRes, err := a.reconciler.Reconcile(ctx, batch)
+	if err != nil {
+		return nil, err
 	}
-	if len(batch.Evidence) == 0 {
-		return &IngestionResult{WorkspaceID: ws}, nil
-	}
-
-	start := time.Now()
-	result := &IngestionResult{
-		WorkspaceID:   ws,
-		EvidenceCount: len(batch.Evidence),
-	}
-
-	// 1. Validate & Transform Evidence + Extract Subject Resources
-	domainEvidence := make([]Evidence, 0, len(batch.Evidence))
-	resourcesMap := make(map[string]Resource)
-
-	for _, protoEv := range batch.Evidence {
-		if protoEv == nil {
-			continue
-		}
-		if protoEv.Id == "" {
-			return nil, fmt.Errorf("state assembler: evidence missing required id")
-		}
-		if protoEv.Subject == nil || protoEv.Subject.Provider == "" || protoEv.Subject.ResourceType == "" || protoEv.Subject.ProviderId == "" {
-			return nil, fmt.Errorf("state assembler: evidence %s missing required subject identity", protoEv.Id)
-		}
-		if protoEv.Source == nil || protoEv.Source.Provider == "" || protoEv.Source.Collector == "" {
-			return nil, fmt.Errorf("state assembler: evidence %s missing required source", protoEv.Id)
-		}
-
-		observedAt, err := time.Parse(time.RFC3339Nano, protoEv.ObservedAt)
-		if err != nil {
-			observedAt, err = time.Parse(time.RFC3339, protoEv.ObservedAt)
-			if err != nil {
-				observedAt = time.Now().UTC()
-			}
-		}
-
-		subjectID := ResourceIdentity{
-			Provider:     protoEv.Subject.Provider,
-			ResourceType: protoEv.Subject.ResourceType,
-			ProviderID:   protoEv.Subject.ProviderId,
-		}
-
-		domainEvidence = append(domainEvidence, Evidence{
-			WorkspaceID: ws,
-			ID:          protoEv.Id,
-			Source: EvidenceSource{
-				Provider:  protoEv.Source.Provider,
-				Collector: protoEv.Source.Collector,
-			},
-			ObservedAt:      observedAt,
-			ObservationType: protoEv.ObservationType,
-			Subject:         subjectID,
-			Data:            protoEv.Data,
-		})
-
-		// Track subject resource
-		key := subjectID.String()
-		if existing, exists := resourcesMap[key]; !exists {
-			resourcesMap[key] = Resource{
-				WorkspaceID:     ws,
-				Identity:        subjectID,
-				FirstObservedAt: observedAt,
-				LastObservedAt:  observedAt,
-			}
-		} else {
-			if observedAt.After(existing.LastObservedAt) {
-				existing.LastObservedAt = observedAt
-				resourcesMap[key] = existing
-			}
-		}
-	}
-
-	// 2. Persist Evidence Records
-	if err := a.store.SaveEvidence(ctx, ws, domainEvidence); err != nil {
-		a.logger.Error("Failed to persist evidence observations",
-			"workspace_id", ws,
-			"evidence_count", len(domainEvidence),
-			"error", err.Error(),
-		)
-		return nil, fmt.Errorf("failed to save evidence: %w", err)
-	}
-
-	// 3. Persist Subject Resources
-	resourcesToSave := make([]Resource, 0, len(resourcesMap))
-	for _, r := range resourcesMap {
-		resourcesToSave = append(resourcesToSave, r)
-	}
-	if err := a.store.SaveResources(ctx, ws, resourcesToSave); err != nil {
-		a.logger.Error("Failed to persist subject resources",
-			"workspace_id", ws,
-			"resource_count", len(resourcesToSave),
-			"error", err.Error(),
-		)
-		return nil, fmt.Errorf("failed to save resources: %w", err)
-	}
-	result.ResourcesRegistered = len(resourcesToSave)
-
-	// 4. Invoke Rust DiscoveryEngine if configured
-	if a.discovery != nil {
-		discReq := &corev1.RunDiscoveryRequest{Evidence: batch.Evidence}
-		discResp, err := a.discovery.RunDiscovery(ctx, discReq)
-		if err != nil {
-			a.logger.Error("Discovery execution failed in Core Engine",
-				"workspace_id", ws,
-				"evidence_count", len(batch.Evidence),
-				"error", err.Error(),
-			)
-			return nil, fmt.Errorf("discovery execution failed: %w", err)
-		}
-
-		var discoveredRels []Relationship
-		var provenanceAssocs []ProvenanceAssociation
-		endpointResources := make(map[string]Resource)
-
-		now := time.Now().UTC()
-
-		for _, res := range discResp.Results {
-			if res == nil {
-				continue
-			}
-
-			if disc := res.GetDiscovered(); disc != nil {
-				result.DiscoveredCount++
-				relProto := disc.Relationship
-				if relProto == nil || relProto.Source == nil || relProto.Target == nil {
-					continue
-				}
-
-				src := ResourceIdentity{
-					Provider:     relProto.Source.Provider,
-					ResourceType: relProto.Source.ResourceType,
-					ProviderID:   relProto.Source.ProviderId,
-				}
-				tgt := ResourceIdentity{
-					Provider:     relProto.Target.Provider,
-					ResourceType: relProto.Target.ResourceType,
-					ProviderID:   relProto.Target.ProviderId,
-				}
-
-				rel := Relationship{
-					WorkspaceID:     ws,
-					Source:          src,
-					Target:          tgt,
-					Kind:            relProto.Kind,
-					Category:        relProto.Category,
-					FirstObservedAt: now,
-					LastObservedAt:  now,
-				}
-				discoveredRels = append(discoveredRels, rel)
-
-				// Ensure endpoints are registered
-				endpointResources[src.String()] = Resource{
-					WorkspaceID:     ws,
-					Identity:        src,
-					FirstObservedAt: now,
-					LastObservedAt:  now,
-				}
-				endpointResources[tgt.String()] = Resource{
-					WorkspaceID:     ws,
-					Identity:        tgt,
-					FirstObservedAt: now,
-					LastObservedAt:  now,
-				}
-
-				// Associate supporting evidence
-				relKey := rel.Key()
-				for _, evID := range disc.SupportingEvidenceIds {
-					provenanceAssocs = append(provenanceAssocs, ProvenanceAssociation{
-						WorkspaceID:  ws,
-						Relationship: relKey,
-						EvidenceID:   evID,
-					})
-					result.ProvenanceLinksAdded++
-				}
-
-			} else if conf := res.GetConflict(); conf != nil {
-				result.ConflictCount++
-				a.logger.Warn("Discovery conflict observed",
-					"workspace_id", ws,
-					"description", conf.Description,
-				)
-				_ = a.store.SaveConflict(ctx, DiscoveryConflict{
-					WorkspaceID: ws,
-					Description: conf.Description,
-					ObservedAt:  now,
-				})
-
-			} else if res.GetInsufficient() != nil {
-				result.InsufficientCount++
-				a.logger.Debug("Evidence insufficient for relationship derivation",
-					"workspace_id", ws,
-				)
-
-			} else if inv := res.GetInvalid(); inv != nil {
-				result.InvalidCount++
-				a.logger.Warn("Discovery encountered invalid evidence observation",
-					"workspace_id", ws,
-					"description", inv.Description,
-				)
-			}
-		}
-
-		// 5. Persist Discovered Relationships, Endpoints & Provenance
-		if len(endpointResources) > 0 {
-			epList := make([]Resource, 0, len(endpointResources))
-			for _, r := range endpointResources {
-				epList = append(epList, r)
-			}
-			_ = a.store.SaveResources(ctx, ws, epList)
-		}
-
-		if len(discoveredRels) > 0 {
-			if err := a.store.SaveRelationships(ctx, ws, discoveredRels); err != nil {
-				a.logger.Error("Failed to persist discovered relationships",
-					"workspace_id", ws,
-					"error", err.Error(),
-				)
-				return nil, fmt.Errorf("failed to save relationships: %w", err)
-			}
-		}
-
-		if len(provenanceAssocs) > 0 {
-			if err := a.store.SaveProvenance(ctx, ws, provenanceAssocs); err != nil {
-				a.logger.Error("Failed to persist provenance associations",
-					"workspace_id", ws,
-					"error", err.Error(),
-				)
-				return nil, fmt.Errorf("failed to save provenance: %w", err)
-			}
-		}
-	}
-
-	duration := time.Since(start)
-	a.logger.Info("Observation batch ingested successfully",
-		"workspace_id", ws,
-		"evidence_count", result.EvidenceCount,
-		"resources_registered", result.ResourcesRegistered,
-		"discovered_count", result.DiscoveredCount,
-		"conflict_count", result.ConflictCount,
-		"duration_ms", duration.Milliseconds(),
-	)
-
-	return result, nil
+	return &IngestionResult{
+		WorkspaceID:          recRes.WorkspaceID,
+		EvidenceCount:        recRes.EvidenceCount,
+		ResourcesRegistered:  recRes.ResourcesCreated + recRes.ResourcesUpdated,
+		DiscoveredCount:      recRes.DiscoveredCount,
+		InsufficientCount:    recRes.InsufficientCount,
+		ConflictCount:        recRes.ConflictsCount,
+		InvalidCount:         recRes.InvalidCount,
+		ProvenanceLinksAdded: recRes.ProvenanceLinksAdded,
+	}, nil
 }
 
 // IngestAndMaterialize ingests an observation batch and refreshes the Rust Core Engine state.
 func (a *StateAssembler) IngestAndMaterialize(ctx context.Context, batch ObservationBatch) (*IngestionResult, error) {
-	res, err := a.Ingest(ctx, batch)
+	recRes, err := a.reconciler.ReconcileAndMaterialize(ctx, batch)
 	if err != nil {
 		return nil, err
 	}
+	return &IngestionResult{
+		WorkspaceID:          recRes.WorkspaceID,
+		EvidenceCount:        recRes.EvidenceCount,
+		ResourcesRegistered:  recRes.ResourcesCreated + recRes.ResourcesUpdated,
+		DiscoveredCount:      recRes.DiscoveredCount,
+		InsufficientCount:    recRes.InsufficientCount,
+		ConflictCount:        recRes.ConflictsCount,
+		InvalidCount:         recRes.InvalidCount,
+		ProvenanceLinksAdded: recRes.ProvenanceLinksAdded,
+	}, nil
+}
 
-	if a.materializer != nil {
-		if _, err := a.materializer.Materialize(ctx, batch.WorkspaceID); err != nil {
-			a.logger.Error("Post-ingestion state materialization failed",
-				"workspace_id", batch.WorkspaceID,
-				"error", err.Error(),
-			)
-			return res, fmt.Errorf("materialization failed: %w", err)
-		}
-	}
+// Reconcile processes a batch of normalized observations using the Reconciler interface.
+func (a *StateAssembler) Reconcile(ctx context.Context, batch ObservationBatch) (*ReconciliationResult, error) {
+	return a.reconciler.Reconcile(ctx, batch)
+}
 
-	return res, nil
+// ReconcileAndMaterialize processes a batch and refreshes Rust Core state using the Reconciler interface.
+func (a *StateAssembler) ReconcileAndMaterialize(ctx context.Context, batch ObservationBatch) (*ReconciliationResult, error) {
+	return a.reconciler.ReconcileAndMaterialize(ctx, batch)
 }

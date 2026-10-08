@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "github.com/aaradhychinche-alt/WhatBreaks/gen/go/wb/core/v1"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/answer"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/config"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/database"
@@ -476,4 +477,129 @@ func TestPostgresStore_Integration(t *testing.T) {
 			t.Errorf("expected evidence %s, got %+v", matEvID, ans.Evidence)
 		}
 	})
+}
+
+func TestPostgresStore_ReconcilerLifecycle(t *testing.T) {
+	cfg := getTestDatabaseConfig(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	logger := logging.NewJSONLogger(nil, logging.LevelDebug, "pg-reconciler-test")
+	db, err := database.New(ctx, cfg, database.WithLogger(logger))
+	if err != nil {
+		t.Skipf("Failed to initialize database pool: %v; skipping", err)
+	}
+	defer db.Close()
+
+	if err := db.Ping(ctx); err != nil {
+		t.Skipf("PostgreSQL Ping failed: %v; skipping", err)
+	}
+
+	if err := state.EnsureSchema(ctx, db); err != nil {
+		t.Fatalf("EnsureSchema failed: %v", err)
+	}
+
+	pgStore := state.NewPostgresStore(db)
+	client := startProdServer(t)
+
+	materializer := state.NewMaterializer(pgStore, client, logger)
+	reconciler := state.NewReconciler(pgStore, client, materializer, logger)
+
+	ws := "ws-pg-rec-lifecycle"
+	_ = pgStore.DeleteWorkspaceState(ctx, ws)
+	defer func() {
+		_ = pgStore.DeleteWorkspaceState(ctx, ws)
+	}()
+
+	frontendSubj := &corev1.ResourceIdentity{
+		Provider:     "kubernetes",
+		ResourceType: "pod",
+		ProviderId:   "payments/frontend",
+	}
+	backendSubj := &corev1.ResourceIdentity{
+		Provider:     "kubernetes",
+		ResourceType: "pod",
+		ProviderId:   "payments/backend",
+	}
+
+	connEv := makeConnectionEvidence("550e8400-e29b-41d4-a716-446655440071", frontendSubj, "10.0.1.50", 8080)
+	mapEv := makeMappingEvidence("550e8400-e29b-41d4-a716-446655440072", backendSubj, "10.0.1.50", 8080)
+
+	// 1. Initial Observation Sweep into PostgreSQL
+	batch1 := state.ObservationBatch{
+		WorkspaceID: ws,
+		Evidence:    []*corev1.Evidence{connEv, mapEv},
+	}
+	res1, err := reconciler.Reconcile(ctx, batch1)
+	if err != nil {
+		t.Fatalf("Cycle 1 Reconcile failed: %v", err)
+	}
+	if res1.ResourcesCreated != 2 || res1.RelationshipsCreated != 1 || res1.ProvenanceLinksAdded != 2 {
+		t.Fatalf("unexpected Cycle 1 result: %+v", res1)
+	}
+
+	// 2. Repeated Sweep (Idempotency) into PostgreSQL
+	res2, err := reconciler.Reconcile(ctx, batch1)
+	if err != nil {
+		t.Fatalf("Cycle 2 Reconcile failed: %v", err)
+	}
+	if res2.ResourcesCreated != 0 || res2.ResourcesUpdated != 2 {
+		t.Errorf("expected 0 created, 2 updated on repeat; got %+v", res2)
+	}
+	if res2.RelationshipsCreated != 0 || res2.RelationshipsUpdated != 1 {
+		t.Errorf("expected 0 rel created, 1 rel updated on repeat; got %+v", res2)
+	}
+	if res2.ResourcesTotal != 2 || res2.RelationshipsTotal != 1 {
+		t.Errorf("expected 2 total resources, 1 total relationship; got %+v", res2)
+	}
+
+	// 3. Partial Gap Sweep (backend omitted) into PostgreSQL
+	// CRITICAL: backend and relationship must NOT be deleted!
+	connEvLater := makeConnectionEvidence("550e8400-e29b-41d4-a716-446655440073", frontendSubj, "10.0.1.50", 8080)
+	batch3 := state.ObservationBatch{
+		WorkspaceID: ws,
+		Evidence:    []*corev1.Evidence{connEvLater},
+	}
+	res3, err := reconciler.ReconcileAndMaterialize(ctx, batch3)
+	if err != nil {
+		t.Fatalf("Cycle 3 ReconcileAndMaterialize failed: %v", err)
+	}
+	if res3.ResourcesCreated != 0 || res3.ResourcesUpdated != 1 {
+		t.Errorf("expected 0 created, 1 updated on partial sweep; got %+v", res3)
+	}
+	if res3.ResourcesTotal != 2 || res3.RelationshipsTotal != 1 {
+		t.Errorf("CRITICAL REGRESSION: unobserved resources or relationships were deleted from PostgreSQL! got %+v", res3)
+	}
+
+	// Verify in database that backend is still present
+	backendResource, err := pgStore.GetResource(ctx, ws, state.ResourceIdentity{
+		Provider:     backendSubj.Provider,
+		ResourceType: backendSubj.ResourceType,
+		ProviderID:   backendSubj.ProviderId,
+	})
+	if err != nil {
+		t.Fatalf("backend resource was deleted from PostgreSQL: %v", err)
+	}
+	if backendResource == nil {
+		t.Fatalf("backend resource must not be nil in PostgreSQL")
+	}
+
+	// 4. Verify Rust Core Engine impact remains intact after materialization
+	answerSvc := answer.NewService(client, logger)
+	ans, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: ws,
+		Target: &answer.ResourceIdentity{
+			Provider:     backendSubj.Provider,
+			ResourceType: backendSubj.ResourceType,
+			ProviderID:   backendSubj.ProviderId,
+		},
+		Direction: "incoming",
+		MaxDepth:  5,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact failed: %v", err)
+	}
+	if ans.Summary.ImpactedCount != 1 {
+		t.Errorf("expected 1 impacted resource (frontend) in Rust Core Engine, got %d", ans.Summary.ImpactedCount)
+	}
 }
