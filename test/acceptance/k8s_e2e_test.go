@@ -467,8 +467,10 @@ func TestKubernetes_RealEndToEndFlow(t *testing.T) {
 		persistedEvidenceMap[ev.ID] = ev
 	}
 
-	// Verify specific ownership relationships and ensure full provenance
+	// Verify specific ownership & dependency relationships and ensure full provenance
 	var foundBackendDeployOwnsPod, foundFrontendDeployOwnsPod bool
+	var foundBackendPodDependsOnNode, foundFrontendPodDependsOnNode bool
+	var backendPodIdentity, frontendPodIdentity, targetNodeIdentity state.ResourceIdentity
 	var foundAnyCallsRelationship bool
 
 	for _, rel := range persistedRelationships {
@@ -507,6 +509,24 @@ func TestKubernetes_RealEndToEndFlow(t *testing.T) {
 					rel.Source.ProviderID, rel.Target.ProviderID, len(evIDs))
 			}
 		}
+
+		// Check for Pod -> Node DEPENDS_ON relationship
+		if rel.Kind == "DEPENDS_ON" && rel.Source.ResourceType == "pod" && rel.Target.ResourceType == "node" {
+			if strings.Contains(rel.Source.ProviderID, "/backend-") {
+				foundBackendPodDependsOnNode = true
+				backendPodIdentity = rel.Source
+				targetNodeIdentity = rel.Target
+				t.Logf("Verified dependency: %s DEPENDS_ON %s (supported by %d evidence records)",
+					rel.Source.ProviderID, rel.Target.ProviderID, len(evIDs))
+			}
+			if strings.Contains(rel.Source.ProviderID, "/frontend-") {
+				foundFrontendPodDependsOnNode = true
+				frontendPodIdentity = rel.Source
+				targetNodeIdentity = rel.Target
+				t.Logf("Verified dependency: %s DEPENDS_ON %s (supported by %d evidence records)",
+					rel.Source.ProviderID, rel.Target.ProviderID, len(evIDs))
+			}
+		}
 	}
 
 	if foundAnyCallsRelationship {
@@ -517,6 +537,15 @@ func TestKubernetes_RealEndToEndFlow(t *testing.T) {
 	}
 	if !foundFrontendDeployOwnsPod {
 		t.Errorf("expected frontend deployment to own frontend pod in discovered relationships")
+	}
+	if !foundBackendPodDependsOnNode {
+		t.Fatalf("expected backend pod to depend on node in discovered relationships")
+	}
+	if !foundFrontendPodDependsOnNode {
+		t.Fatalf("expected frontend pod to depend on node in discovered relationships")
+	}
+	if targetNodeIdentity.ProviderID == "" {
+		t.Fatalf("expected target node identity to be populated from discovered DEPENDS_ON relationships")
 	}
 
 	// 10. Materialize into Rust Core Process
@@ -538,8 +567,106 @@ func TestKubernetes_RealEndToEndFlow(t *testing.T) {
 	// 11. Run Real Impact Query ("What Breaks?") on the collected state
 	answerSvc := answer.NewService(coreClient, logger)
 
-	// A. Query impact on backend Deployment
-	// In ImpactEngine v1, OWNS is a containment/lifecycle boundary and does NOT propagate impact.
+	// A. Query impact on the real Kubernetes Node (Incoming traversal along DEPENDS_ON)
+	// Because Pod DEPENDS_ON Node, incoming traversal from Node discovers upstream dependent Pods.
+	// Since DEPENDS_ON propagates impact, this produces a real, non-zero blast radius!
+	impactTargetNode := &answer.ResourceIdentity{
+		Provider:     targetNodeIdentity.Provider,
+		ResourceType: targetNodeIdentity.ResourceType,
+		ProviderID:   targetNodeIdentity.ProviderID,
+	}
+
+	ansNode, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: workspaceID,
+		Target:      impactTargetNode,
+		Direction:   "incoming",
+		MaxDepth:    5,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact on Node failed: %v", err)
+	}
+	if ansNode.Target.ProviderID != targetNodeIdentity.ProviderID {
+		t.Errorf("expected target %s in ImpactAnswer, got %s", targetNodeIdentity.ProviderID, ansNode.Target.ProviderID)
+	}
+
+	t.Logf("Node Impact Answer: target=%s, impacted_count=%d, direct_count=%d, indirect_count=%d, max_depth=%d, paths=%d, evidence_refs=%d",
+		ansNode.Target.ProviderID, ansNode.Summary.ImpactedCount, ansNode.Summary.DirectCount,
+		ansNode.Summary.IndirectCount, ansNode.Summary.MaxDepth, len(ansNode.Paths), len(ansNode.Evidence))
+
+	// Verify non-zero blast radius
+	if ansNode.Summary.ImpactedCount == 0 {
+		t.Fatalf("expected non-zero blast radius for Node with dependent Pods, got 0")
+	}
+	if ansNode.Summary.DirectCount < 2 {
+		t.Errorf("expected at least 2 directly impacted pods (backend and frontend), got %d", ansNode.Summary.DirectCount)
+	}
+
+	// Verify that the impacted resources are indeed the real Kubernetes Pods
+	impactedMap := make(map[string]answer.ImpactedResource)
+	for _, ir := range ansNode.ImpactedResources {
+		impactedMap[ir.Resource.ProviderID] = ir
+		t.Logf("  Impacted Resource: %s (depth=%d)", ir.Resource.ProviderID, ir.Depth)
+	}
+
+	if ir, ok := impactedMap[backendPodIdentity.ProviderID]; !ok {
+		t.Errorf("expected backend pod %s in impacted resources", backendPodIdentity.ProviderID)
+	} else if ir.Depth != 1 {
+		t.Errorf("expected backend pod depth=1, got %d", ir.Depth)
+	}
+
+	if ir, ok := impactedMap[frontendPodIdentity.ProviderID]; !ok {
+		t.Errorf("expected frontend pod %s in impacted resources", frontendPodIdentity.ProviderID)
+	} else if ir.Depth != 1 {
+		t.Errorf("expected frontend pod depth=1, got %d", ir.Depth)
+	}
+
+	// Verify Paths: Pod -> DEPENDS_ON -> Node
+	if len(ansNode.Paths) < 2 {
+		t.Errorf("expected at least 2 paths in answer, got %d", len(ansNode.Paths))
+	}
+	for i, path := range ansNode.Paths {
+		t.Logf("  Path %d: %v (rels: %v)", i, path.Resources, path.Relationships)
+		if len(path.Resources) != 2 {
+			t.Errorf("expected 2 resources in path, got %d", len(path.Resources))
+			continue
+		}
+		if path.Resources[0].ResourceType != "pod" {
+			t.Errorf("expected first path resource to be pod, got %s", path.Resources[0].ResourceType)
+		}
+		if path.Resources[1].ProviderID != targetNodeIdentity.ProviderID {
+			t.Errorf("expected last path resource to be target node %s, got %s", targetNodeIdentity.ProviderID, path.Resources[1].ProviderID)
+		}
+		if len(path.Relationships) != 1 {
+			t.Errorf("expected 1 relationship in path, got %d", len(path.Relationships))
+			continue
+		}
+		rel := path.Relationships[0]
+		if rel.Kind != "DEPENDS_ON" {
+			t.Errorf("expected path relationship to be DEPENDS_ON, got %s", rel.Kind)
+		}
+		if rel.Source.ProviderID != path.Resources[0].ProviderID || rel.Target.ProviderID != path.Resources[1].ProviderID {
+			t.Errorf("path relationship endpoints mismatch: rel=(%s -> %s), path=(%s -> %s)",
+				rel.Source.ProviderID, rel.Target.ProviderID, path.Resources[0].ProviderID, path.Resources[1].ProviderID)
+		}
+	}
+
+	// Verify Evidence in Answer: must match persisted PostgreSQL evidence records
+	if len(ansNode.Evidence) == 0 {
+		t.Errorf("expected supporting evidence in answer, got 0")
+	}
+	for _, ev := range ansNode.Evidence {
+		t.Logf("  Answer Evidence: id=%s, type=%s, source=%s/%s",
+			ev.ID, ev.ObservationType, ev.Source.Provider, ev.Source.Collector)
+		if _, exists := persistedEvidenceMap[ev.ID]; !exists {
+			t.Errorf("answer evidence %s does not exist in persisted PostgreSQL evidence", ev.ID)
+		}
+		if ev.Source.Provider != "kubernetes" || ev.Source.Collector != "k8s-collector" {
+			t.Errorf("unexpected evidence source: %+v", ev.Source)
+		}
+	}
+
+	// B. Query impact on backend Deployment (outgoing traversal)
+	// Demonstrates that OWNS does NOT propagate through ImpactEngine (hard boundary).
 	impactTargetDeploy := &answer.ResourceIdentity{
 		Provider:     "kubernetes",
 		ResourceType: "deployment",
@@ -564,12 +691,12 @@ func TestKubernetes_RealEndToEndFlow(t *testing.T) {
 
 	// Validate Impact v1 boundary guarantee: OWNS does not propagate impact
 	if ansDeploy.Summary.ImpactedCount != 0 {
-		t.Logf("Note: ImpactEngine propagated %d resources from deployment", ansDeploy.Summary.ImpactedCount)
+		t.Errorf("architectural violation: ImpactEngine propagated %d resources across OWNS boundary", ansDeploy.Summary.ImpactedCount)
 	} else {
 		t.Logf("Verified ImpactEngine v1 boundary: OWNS is a hard containment boundary and does not propagate impact")
 	}
 
-	// B. Query impact on backend Service
+	// C. Query impact on backend Service (incoming traversal)
 	// Without runtime network telemetry, no CALLS relationship exists between Service and clients
 	impactTargetSvc := &answer.ResourceIdentity{
 		Provider:     "kubernetes",
@@ -592,5 +719,5 @@ func TestKubernetes_RealEndToEndFlow(t *testing.T) {
 	t.Logf("Service Impact Answer: target=%s, impacted_count=%d (honest: 0 runtime callers without network evidence)",
 		ansSvc.Target.ProviderID, ansSvc.Summary.ImpactedCount)
 
-	t.Logf("Real Kubernetes End-to-End flow verified successfully with control-plane ownership and ZERO fake data.")
+	t.Logf("Real Kubernetes End-to-End flow verified successfully with DEPENDS_ON non-zero blast radius, control-plane ownership, and ZERO fake data.")
 }
