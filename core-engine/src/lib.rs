@@ -41,7 +41,10 @@ pub use graph::Graph;
 pub use history::{
     RelationshipHistory, RelationshipObservation, RelationshipState, RelationshipStateDerivation,
 };
-pub use impact::{propagates_impact, ImpactEngine, ImpactRequest, ImpactResult, ImpactedResource};
+pub use impact::{
+    propagates_impact, ChangeAssessment, ChangeType, ImpactEngine, ImpactRequest, ImpactResult,
+    ImpactedResource, ProposedChange,
+};
 pub use provenance::{ProvenanceStore, RelationshipEvidence};
 pub use relationship::{Relationship, RelationshipCategory, RelationshipKind};
 pub use resource::{

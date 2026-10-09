@@ -43,6 +43,7 @@ async fn test_rpc_empty_target() {
         direction: "incoming".to_string(),
         max_depth: 3,
         workspace_id: "".to_string(),
+        proposed_change: None,
     });
     let err = svc.analyze_impact(req).await.unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
@@ -61,6 +62,7 @@ async fn test_rpc_empty_resource_identity_field() {
         direction: "incoming".to_string(),
         max_depth: 3,
         workspace_id: "".to_string(),
+        proposed_change: None,
     });
     let err = svc.analyze_impact(req).await.unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
@@ -75,6 +77,7 @@ async fn test_rpc_invalid_direction() {
         direction: "sideways".to_string(),
         max_depth: 3,
         workspace_id: "".to_string(),
+        proposed_change: None,
     });
     let err = svc.analyze_impact(req).await.unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
@@ -89,6 +92,7 @@ async fn test_rpc_zero_max_depth() {
         direction: "incoming".to_string(),
         max_depth: 0,
         workspace_id: "".to_string(),
+        proposed_change: None,
     });
     let err = svc.analyze_impact(req).await.unwrap_err();
     assert_eq!(err.code(), Code::InvalidArgument);
@@ -103,6 +107,7 @@ async fn test_rpc_empty_state_returns_empty_answer() {
         direction: "incoming".to_string(),
         max_depth: 3,
         workspace_id: "".to_string(),
+        proposed_change: None,
     });
     let resp = svc.analyze_impact(req).await.unwrap().into_inner();
     assert_eq!(resp.target.unwrap().provider_id, "api");
@@ -173,6 +178,7 @@ async fn test_in_process_grpc_server_and_client_roundtrip() {
         direction: "incoming".to_string(),
         max_depth: 2,
         workspace_id: "".to_string(),
+        proposed_change: None,
     };
 
     let resp = client.analyze_impact(req).await.unwrap().into_inner();
@@ -247,6 +253,7 @@ async fn test_rpc_load_state_and_workspace_isolation() {
         direction: "incoming".to_string(),
         max_depth: 3,
         workspace_id: "workspace-A".to_string(),
+        proposed_change: None,
     });
     let resp_a = answer_svc.analyze_impact(req_a).await.unwrap().into_inner();
     assert_eq!(resp_a.summary.unwrap().impacted_count, 1);
@@ -259,9 +266,212 @@ async fn test_rpc_load_state_and_workspace_isolation() {
         direction: "incoming".to_string(),
         max_depth: 3,
         workspace_id: "workspace-B".to_string(),
+        proposed_change: None,
     });
     let resp_b = answer_svc.analyze_impact(req_b).await.unwrap().into_inner();
     assert_eq!(resp_b.summary.unwrap().impacted_count, 0);
     assert!(resp_b.impacted_resources.is_empty());
     assert!(resp_b.relationships.is_empty());
+}
+
+#[tokio::test]
+async fn test_rpc_change_aware_delete_vs_update() {
+    let answer_svc = AnswerServiceImpl::default();
+
+    // Setup graph: frontend -> api -> db
+    let rel1 = proto::Relationship {
+        source: Some(proto_identity("kubernetes", "service", "api")),
+        target: Some(proto_identity("kubernetes", "service", "db")),
+        kind: "DEPENDS_ON".to_string(),
+        category: "Dependency".to_string(),
+    };
+    let rel2 = proto::Relationship {
+        source: Some(proto_identity("kubernetes", "service", "frontend")),
+        target: Some(proto_identity("kubernetes", "service", "api")),
+        kind: "DEPENDS_ON".to_string(),
+        category: "Dependency".to_string(),
+    };
+
+    let load_req = Request::new(proto::LoadStateRequest {
+        workspace_id: "test-ws".to_string(),
+        relationships: vec![rel1, rel2],
+        associations: vec![],
+        evidence: vec![],
+    });
+    answer_svc.load_state(load_req).await.unwrap();
+
+    // 1. DELETE on db -> should reach api (depth 1) and frontend (depth 2)
+    let req_delete = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "db")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "test-ws".to_string(),
+        proposed_change: Some(proto::ProposedChange {
+            change_type: proto::ChangeType::Delete as i32,
+            details: "deleting db instance".to_string(),
+        }),
+    });
+    let resp_delete = answer_svc
+        .analyze_impact(req_delete)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp_delete.summary.unwrap().impacted_count, 2);
+    let assessment = resp_delete.change_assessment.unwrap();
+    assert_eq!(assessment.change_type, proto::ChangeType::Delete as i32);
+    assert_eq!(assessment.impact_nature, "POTENTIAL_IMPACT");
+    assert!(!assessment.assumptions.is_empty());
+    assert!(!assessment.limitations.is_empty());
+
+    // Check impacted resources have impact_type and impact_reason
+    assert_eq!(resp_delete.impacted_resources[0].impact_type, "DIRECT");
+    assert!(!resp_delete.impacted_resources[0].impact_reason.is_empty());
+    assert_eq!(resp_delete.impacted_resources[1].impact_type, "INDIRECT");
+
+    // 2. UPDATE on db -> should reach ONLY api (depth 1), frontend suppressed in v1
+    let req_update = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "db")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "test-ws".to_string(),
+        proposed_change: Some(proto::ProposedChange {
+            change_type: proto::ChangeType::Update as i32,
+            details: "updating connection pool".to_string(),
+        }),
+    });
+    let resp_update = answer_svc
+        .analyze_impact(req_update)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp_update.summary.unwrap().impacted_count, 1);
+    assert_eq!(
+        resp_update.impacted_resources[0]
+            .resource
+            .as_ref()
+            .unwrap()
+            .provider_id,
+        "api"
+    );
+    assert_eq!(resp_update.impacted_resources[0].impact_type, "DIRECT");
+
+    // 3. SCALE on db -> db only has DEPENDS_ON incoming, SCALE requires CALLS => 0 impacted
+    let req_scale = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "db")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "test-ws".to_string(),
+        proposed_change: Some(proto::ProposedChange {
+            change_type: proto::ChangeType::Scale as i32,
+            details: "scaling replicas".to_string(),
+        }),
+    });
+    let resp_scale = answer_svc
+        .analyze_impact(req_scale)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp_scale.summary.unwrap().impacted_count, 0);
+    let scale_assessment = resp_scale.change_assessment.unwrap();
+    assert_eq!(
+        scale_assessment.change_type,
+        proto::ChangeType::Scale as i32
+    );
+    assert_eq!(scale_assessment.impact_nature, "POTENTIAL_IMPACT");
+    let has_dep_explanation = scale_assessment.limitations.iter().any(|l| {
+        l.contains("declarative dependencies (e.g. DEPENDS_ON)")
+            && l.contains("no runtime CALLS relationships were observed")
+    });
+    assert!(
+        has_dep_explanation,
+        "limitations: {:?}",
+        scale_assessment.limitations
+    );
+
+    // 3b. REPLACE on db -> reaches api (depth 1) only, frontend (depth 2) suppressed
+    let req_replace = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "db")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "test-ws".to_string(),
+        proposed_change: Some(proto::ProposedChange {
+            change_type: proto::ChangeType::Replace as i32,
+            details: "replacing db instance".to_string(),
+        }),
+    });
+    let resp_replace = answer_svc
+        .analyze_impact(req_replace)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp_replace.summary.unwrap().impacted_count, 1);
+    assert_eq!(
+        resp_replace.impacted_resources[0]
+            .resource
+            .as_ref()
+            .unwrap()
+            .provider_id,
+        "api"
+    );
+    assert_eq!(resp_replace.impacted_resources[0].depth, 1);
+    assert_eq!(resp_replace.impacted_resources[0].impact_type, "DIRECT");
+    assert!(resp_replace.impacted_resources[0]
+        .impact_reason
+        .contains("transient rollover"));
+    let replace_assessment = resp_replace.change_assessment.unwrap();
+    assert_eq!(
+        replace_assessment.change_type,
+        proto::ChangeType::Replace as i32
+    );
+
+    // 3c. Legacy request without proposed_change -> change_assessment is None, impact_type is empty
+    let req_legacy = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "db")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "test-ws".to_string(),
+        proposed_change: None,
+    });
+    let resp_legacy = answer_svc
+        .analyze_impact(req_legacy)
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp_legacy.summary.unwrap().impacted_count, 2);
+    assert!(resp_legacy.change_assessment.is_none());
+    assert_eq!(resp_legacy.impacted_resources[0].impact_type, "");
+    assert_eq!(resp_legacy.impacted_resources[0].impact_reason, "");
+
+    // 4. Unspecified change_type -> must return InvalidArgument
+    let req_unspecified = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "db")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "test-ws".to_string(),
+        proposed_change: Some(proto::ProposedChange {
+            change_type: proto::ChangeType::Unspecified as i32,
+            details: "".to_string(),
+        }),
+    });
+    let err = answer_svc
+        .analyze_impact(req_unspecified)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), Code::InvalidArgument);
+    assert!(err.message().contains("cannot be unspecified"));
+
+    // 5. Unsupported change_type integer -> must return InvalidArgument
+    let req_invalid = Request::new(AnalyzeImpactRequest {
+        target: Some(proto_identity("kubernetes", "service", "db")),
+        direction: "incoming".to_string(),
+        max_depth: 3,
+        workspace_id: "test-ws".to_string(),
+        proposed_change: Some(proto::ProposedChange {
+            change_type: 999,
+            details: "".to_string(),
+        }),
+    });
+    let err_invalid = answer_svc.analyze_impact(req_invalid).await.unwrap_err();
+    assert_eq!(err_invalid.code(), Code::InvalidArgument);
+    assert!(err_invalid.message().contains("unsupported change_type"));
 }

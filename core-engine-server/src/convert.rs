@@ -271,6 +271,7 @@ use wb_core_engine::answer::{
     AnswerEvidence, AnswerRelationship, AnswerRequest, ExplanationFact, ImpactAnswer, ImpactPath,
     ImpactSummary,
 };
+use wb_core_engine::impact::{ChangeAssessment, ChangeType, ProposedChange};
 use wb_core_engine::traversal::TraversalDirection;
 use wb_core_engine::ImpactedResource;
 
@@ -296,7 +297,40 @@ pub fn proto_to_answer_request(p: proto::AnalyzeImpactRequest) -> Result<AnswerR
         return Err(Status::invalid_argument("max_depth must be greater than 0"));
     }
 
-    Ok(AnswerRequest::new(target, direction, p.max_depth as usize))
+    let proposed_change = if let Some(pc) = p.proposed_change {
+        if pc.change_type == proto::ChangeType::Unspecified as i32 {
+            return Err(Status::invalid_argument(
+                "proposed_change.change_type cannot be unspecified when proposed_change is provided",
+            ));
+        }
+        let change_type = match proto::ChangeType::try_from(pc.change_type) {
+            Ok(proto::ChangeType::Delete) => ChangeType::Delete,
+            Ok(proto::ChangeType::Update) => ChangeType::Update,
+            Ok(proto::ChangeType::Scale) => ChangeType::Scale,
+            Ok(proto::ChangeType::Replace) => ChangeType::Replace,
+            _ => {
+                return Err(Status::invalid_argument(format!(
+                    "unsupported change_type value: {}",
+                    pc.change_type
+                )));
+            }
+        };
+        let details = if pc.details.trim().is_empty() {
+            None
+        } else {
+            Some(pc.details)
+        };
+        Some(ProposedChange {
+            change_type,
+            details,
+        })
+    } else {
+        None
+    };
+
+    let mut answer_req = AnswerRequest::new(target, direction, p.max_depth as usize);
+    answer_req.proposed_change = proposed_change;
+    Ok(answer_req)
 }
 
 /// Convert domain `ImpactSummary` to protobuf `ImpactSummary`.
@@ -314,6 +348,8 @@ pub fn impacted_resource_to_proto(r: &ImpactedResource) -> proto::ImpactedResour
     proto::ImpactedResource {
         resource: Some(resource_identity_to_proto(&r.resource)),
         depth: r.depth as u32,
+        impact_type: r.impact_type.clone().unwrap_or_default(),
+        impact_reason: r.impact_reason.clone().unwrap_or_default(),
     }
 }
 
@@ -360,6 +396,22 @@ pub fn explanation_fact_to_proto(f: &ExplanationFact) -> proto::ExplanationFact 
     }
 }
 
+/// Convert domain `ChangeAssessment` to protobuf `ChangeAssessment`.
+pub fn change_assessment_to_proto(ca: &ChangeAssessment) -> proto::ChangeAssessment {
+    let ct = match ca.change_type {
+        ChangeType::Delete => proto::ChangeType::Delete,
+        ChangeType::Update => proto::ChangeType::Update,
+        ChangeType::Scale => proto::ChangeType::Scale,
+        ChangeType::Replace => proto::ChangeType::Replace,
+    };
+    proto::ChangeAssessment {
+        change_type: ct as i32,
+        impact_nature: ca.impact_nature.clone(),
+        assumptions: ca.assumptions.clone(),
+        limitations: ca.limitations.clone(),
+    }
+}
+
 /// Convert domain `ImpactAnswer` to protobuf `AnalyzeImpactResponse`.
 pub fn impact_answer_to_proto(ans: ImpactAnswer) -> proto::AnalyzeImpactResponse {
     proto::AnalyzeImpactResponse {
@@ -382,5 +434,9 @@ pub fn impact_answer_to_proto(ans: ImpactAnswer) -> proto::AnalyzeImpactResponse
             .iter()
             .map(explanation_fact_to_proto)
             .collect(),
+        change_assessment: ans
+            .change_assessment
+            .as_ref()
+            .map(change_assessment_to_proto),
     }
 }

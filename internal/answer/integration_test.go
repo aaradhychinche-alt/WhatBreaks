@@ -446,3 +446,285 @@ func TestIntegration_SupportedUnknownStateSurvivesBoundary(t *testing.T) {
 		t.Error("expected at least one 'unknown' relationship across the boundary")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Change-Aware Impact Analysis Integration Test: DELETE vs UPDATE vs SCALE
+// ---------------------------------------------------------------------------
+func TestIntegration_ChangeAwareEndToEnd_DeleteVsUpdateVsScale(t *testing.T) {
+	client := startFixtureServer(t)
+
+	svc := answer.NewService(client, nil)
+	h := answer.NewHandler(svc)
+
+	target := map[string]interface{}{
+		"provider":      "kubernetes",
+		"resource_type": "service",
+		"provider_id":   "payments-api",
+	}
+
+	// 1. Proposed Change: DELETE -> multi-hop reaching checkout-service and frontend
+	deletePayload, _ := json.Marshal(map[string]interface{}{
+		"target":    target,
+		"direction": "incoming",
+		"max_depth": 5,
+		"proposed_change": map[string]interface{}{
+			"change_type": "DELETE",
+			"details":     "deleting payments-api deployment",
+		},
+	})
+
+	reqDelete := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(deletePayload))
+	rrDelete := httptest.NewRecorder()
+	h.ServeHTTP(rrDelete, reqDelete)
+
+	if rrDelete.Code != http.StatusOK {
+		t.Fatalf("DELETE expected 200 OK, got %d: %s", rrDelete.Code, rrDelete.Body.String())
+	}
+
+	var ansDelete answer.ImpactAnswer
+	if err := json.Unmarshal(rrDelete.Body.Bytes(), &ansDelete); err != nil {
+		t.Fatalf("failed to decode DELETE response: %v", err)
+	}
+
+	if ansDelete.Summary.ImpactedCount != 2 {
+		t.Errorf("DELETE expected 2 impacted resources, got %d", ansDelete.Summary.ImpactedCount)
+	}
+	if ansDelete.ChangeAssessment == nil {
+		t.Fatal("DELETE expected non-nil ChangeAssessment")
+	}
+	if ansDelete.ChangeAssessment.ChangeType != answer.ChangeTypeDelete {
+		t.Errorf("expected ChangeType DELETE, got %s", ansDelete.ChangeAssessment.ChangeType)
+	}
+	if ansDelete.ChangeAssessment.ImpactNature != "POTENTIAL_IMPACT" {
+		t.Errorf("expected POTENTIAL_IMPACT, got %s", ansDelete.ChangeAssessment.ImpactNature)
+	}
+	// Check direct vs indirect classifications
+	if ansDelete.ImpactedResources[0].ImpactType != "DIRECT" {
+		t.Errorf("expected first impacted resource DIRECT, got %s", ansDelete.ImpactedResources[0].ImpactType)
+	}
+	if ansDelete.ImpactedResources[1].ImpactType != "INDIRECT" {
+		t.Errorf("expected second impacted resource INDIRECT, got %s", ansDelete.ImpactedResources[1].ImpactType)
+	}
+
+	// 2. Proposed Change: UPDATE -> depth 1 only (checkout-service only)
+	updatePayload, _ := json.Marshal(map[string]interface{}{
+		"target":    target,
+		"direction": "incoming",
+		"max_depth": 5,
+		"proposed_change": map[string]interface{}{
+			"change_type": "UPDATE",
+			"details":     "updating service port",
+		},
+	})
+
+	reqUpdate := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(updatePayload))
+	rrUpdate := httptest.NewRecorder()
+	h.ServeHTTP(rrUpdate, reqUpdate)
+
+	if rrUpdate.Code != http.StatusOK {
+		t.Fatalf("UPDATE expected 200 OK, got %d: %s", rrUpdate.Code, rrUpdate.Body.String())
+	}
+
+	var ansUpdate answer.ImpactAnswer
+	if err := json.Unmarshal(rrUpdate.Body.Bytes(), &ansUpdate); err != nil {
+		t.Fatalf("failed to decode UPDATE response: %v", err)
+	}
+
+	if ansUpdate.Summary.ImpactedCount != 1 {
+		t.Errorf("UPDATE expected 1 impacted resource (depth 1 only), got %d", ansUpdate.Summary.ImpactedCount)
+	}
+	if ansUpdate.ImpactedResources[0].Resource.ProviderID != "checkout-service" {
+		t.Errorf("UPDATE expected checkout-service, got %s", ansUpdate.ImpactedResources[0].Resource.ProviderID)
+	}
+	if ansUpdate.ImpactedResources[0].ImpactType != "DIRECT" {
+		t.Errorf("expected DIRECT impact_type, got %s", ansUpdate.ImpactedResources[0].ImpactType)
+	}
+
+	// 3. Proposed Change: SCALE -> 0 impacted because relationships are DEPENDS_ON, not CALLS
+	scalePayload, _ := json.Marshal(map[string]interface{}{
+		"target":    target,
+		"direction": "incoming",
+		"max_depth": 5,
+		"proposed_change": map[string]interface{}{
+			"change_type": "SCALE",
+			"details":     "scaling down replicas",
+		},
+	})
+
+	reqScale := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(scalePayload))
+	rrScale := httptest.NewRecorder()
+	h.ServeHTTP(rrScale, reqScale)
+
+	if rrScale.Code != http.StatusOK {
+		t.Fatalf("SCALE expected 200 OK, got %d: %s", rrScale.Code, rrScale.Body.String())
+	}
+
+	var ansScale answer.ImpactAnswer
+	if err := json.Unmarshal(rrScale.Body.Bytes(), &ansScale); err != nil {
+		t.Fatalf("failed to decode SCALE response: %v", err)
+	}
+
+	if ansScale.Summary.ImpactedCount != 0 {
+		t.Errorf("SCALE expected 0 impacted resources (DEPENDS_ON excluded), got %d", ansScale.Summary.ImpactedCount)
+	}
+	if ansScale.ChangeAssessment == nil {
+		t.Fatal("SCALE expected non-nil ChangeAssessment")
+	}
+	if ansScale.ChangeAssessment.ChangeType != answer.ChangeTypeScale {
+		t.Errorf("expected ChangeType SCALE, got %s", ansScale.ChangeAssessment.ChangeType)
+	}
+	if ansScale.ChangeAssessment.ImpactNature != "POTENTIAL_IMPACT" {
+		t.Errorf("expected POTENTIAL_IMPACT, got %s", ansScale.ChangeAssessment.ImpactNature)
+	}
+	hasDepExplanation := false
+	for _, lim := range ansScale.ChangeAssessment.Limitations {
+		if strings.Contains(lim, "declarative dependencies (e.g. DEPENDS_ON)") && strings.Contains(lim, "no runtime CALLS relationships were observed") {
+			hasDepExplanation = true
+			break
+		}
+	}
+	if !hasDepExplanation {
+		t.Errorf("SCALE limitations must explain DEPENDS_ON exclusion, got: %+v", ansScale.ChangeAssessment.Limitations)
+	}
+
+	// 4. Proposed Change: REPLACE -> depth 1 only (checkout-service only), frontend suppressed
+	replacePayload, _ := json.Marshal(map[string]interface{}{
+		"target":    target,
+		"direction": "incoming",
+		"max_depth": 5,
+		"proposed_change": map[string]interface{}{
+			"change_type": "REPLACE",
+			"details":     "rolling replacement of payments-api deployment",
+		},
+	})
+
+	reqReplace := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(replacePayload))
+	rrReplace := httptest.NewRecorder()
+	h.ServeHTTP(rrReplace, reqReplace)
+
+	if rrReplace.Code != http.StatusOK {
+		t.Fatalf("REPLACE expected 200 OK, got %d: %s", rrReplace.Code, rrReplace.Body.String())
+	}
+
+	var ansReplace answer.ImpactAnswer
+	if err := json.Unmarshal(rrReplace.Body.Bytes(), &ansReplace); err != nil {
+		t.Fatalf("failed to decode REPLACE response: %v", err)
+	}
+
+	if ansReplace.Summary.ImpactedCount != 1 {
+		t.Errorf("REPLACE expected 1 impacted resource (depth 1 only), got %d", ansReplace.Summary.ImpactedCount)
+	}
+	if ansReplace.ImpactedResources[0].Resource.ProviderID != "checkout-service" {
+		t.Errorf("REPLACE expected checkout-service, got %s", ansReplace.ImpactedResources[0].Resource.ProviderID)
+	}
+	if ansReplace.ImpactedResources[0].ImpactType != "DIRECT" {
+		t.Errorf("expected DIRECT impact_type, got %s", ansReplace.ImpactedResources[0].ImpactType)
+	}
+	if !strings.Contains(ansReplace.ImpactedResources[0].ImpactReason, "transient rollover or reconnection") {
+		t.Errorf("expected rollover explanation, got %q", ansReplace.ImpactedResources[0].ImpactReason)
+	}
+	if ansReplace.ChangeAssessment == nil || ansReplace.ChangeAssessment.ChangeType != answer.ChangeTypeReplace {
+		t.Errorf("expected ChangeAssessment REPLACE, got %+v", ansReplace.ChangeAssessment)
+	}
+	if ansReplace.ChangeAssessment.ImpactNature != "POTENTIAL_IMPACT" {
+		t.Errorf("expected POTENTIAL_IMPACT, got %s", ansReplace.ChangeAssessment.ImpactNature)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Backward Compatibility End-to-End Tests: omitted, null, and empty proposed_change
+// ---------------------------------------------------------------------------
+func TestIntegration_ChangeAware_BackwardCompatibilityEndToEnd(t *testing.T) {
+	client := startFixtureServer(t)
+	svc := answer.NewService(client, nil)
+	h := answer.NewHandler(svc)
+
+	target := map[string]interface{}{
+		"provider":      "kubernetes",
+		"resource_type": "service",
+		"provider_id":   "payments-api",
+	}
+
+	cases := []struct {
+		name    string
+		payload []byte
+	}{
+		{
+			name: "proposed_change omitted",
+			payload: func() []byte {
+				b, _ := json.Marshal(map[string]interface{}{
+					"target":    target,
+					"direction": "incoming",
+					"max_depth": 5,
+				})
+				return b
+			}(),
+		},
+		{
+			name: "proposed_change null",
+			payload: func() []byte {
+				b, _ := json.Marshal(map[string]interface{}{
+					"target":          target,
+					"direction":       "incoming",
+					"max_depth":       5,
+					"proposed_change": nil,
+				})
+				return b
+			}(),
+		},
+		{
+			name: "proposed_change empty object",
+			payload: func() []byte {
+				b, _ := json.Marshal(map[string]interface{}{
+					"target":          target,
+					"direction":       "incoming",
+					"max_depth":       5,
+					"proposed_change": map[string]interface{}{},
+				})
+				return b
+			}(),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(tc.payload))
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusOK {
+				t.Fatalf("expected 200 OK, got %d: %s", rr.Code, rr.Body.String())
+			}
+
+			var ans answer.ImpactAnswer
+			if err := json.Unmarshal(rr.Body.Bytes(), &ans); err != nil {
+				t.Fatalf("failed to decode response: %v", err)
+			}
+
+			// Legacy analysis finds both checkout-service and frontend (depth 1 and 2)
+			if ans.Summary.ImpactedCount != 2 {
+				t.Errorf("expected 2 impacted resources in legacy analysis, got %d", ans.Summary.ImpactedCount)
+			}
+			if ans.ChangeAssessment != nil {
+				t.Errorf("legacy response must not include ChangeAssessment, got %+v", ans.ChangeAssessment)
+			}
+			for i, ir := range ans.ImpactedResources {
+				if ir.ImpactType != "" {
+					t.Errorf("resource %d expected empty ImpactType in legacy mode, got %q", i, ir.ImpactType)
+				}
+				if ir.ImpactReason != "" {
+					t.Errorf("resource %d expected empty ImpactReason in legacy mode, got %q", i, ir.ImpactReason)
+				}
+			}
+
+			// Raw JSON check: omitempty must suppress change_assessment and impact_type
+			bodyStr := rr.Body.String()
+			if strings.Contains(bodyStr, `"change_assessment"`) {
+				t.Errorf("raw JSON must not contain change_assessment in legacy mode: %s", bodyStr)
+			}
+			if strings.Contains(bodyStr, `"impact_type"`) {
+				t.Errorf("raw JSON must not contain impact_type in legacy mode: %s", bodyStr)
+			}
+		})
+	}
+}

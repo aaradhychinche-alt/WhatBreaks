@@ -221,6 +221,33 @@ message RunDiscoveryResponse {
 // Structured, explainable facts produced by the Rust Answer Engine.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Change Intent & Assessment Messages
+// ---------------------------------------------------------------------------
+
+// Supported change types for change-aware impact analysis.
+enum ChangeType {
+  CHANGE_TYPE_UNSPECIFIED = 0;
+  CHANGE_TYPE_DELETE = 1;
+  CHANGE_TYPE_UPDATE = 2;
+  CHANGE_TYPE_SCALE = 3;
+  CHANGE_TYPE_REPLACE = 4;
+}
+
+// Proposed change specified by the caller.
+message ProposedChange {
+  ChangeType change_type = 1;
+  string details = 2;
+}
+
+// Deterministic assessment of the proposed change's nature, assumptions, and limitations.
+message ChangeAssessment {
+  ChangeType change_type = 1;
+  string impact_nature = 2; // e.g. "POTENTIAL_IMPACT"
+  repeated string assumptions = 3;
+  repeated string limitations = 4;
+}
+
 // A request to compute the candidate blast radius and structured explanation.
 message AnalyzeImpactRequest {
   // Target resource to evaluate for change or failure impact.
@@ -234,6 +261,9 @@ message AnalyzeImpactRequest {
 
   // Workspace scope for tenant isolation (optional, empty defaults to default tenant).
   string workspace_id = 4;
+
+  // Proposed change intent for change-aware impact analysis (optional).
+  ProposedChange proposed_change = 5;
 }
 
 // Deterministic aggregate facts summarizing the candidate blast radius.
@@ -248,6 +278,8 @@ message ImpactSummary {
 message ImpactedResource {
   ResourceIdentity resource = 1;
   uint32 depth = 2;
+  string impact_type = 3; // "DIRECT" or "INDIRECT"
+  string impact_reason = 4; // Factual explanation of why this resource is impacted under the proposed change
 }
 
 // An infrastructure relationship with its derived operational state and supporting evidence IDs.
@@ -287,6 +319,7 @@ message AnalyzeImpactResponse {
   repeated ImpactPath paths = 5;
   repeated AnswerEvidence evidence = 6;
   repeated ExplanationFact explanation_facts = 7;
+  ChangeAssessment change_assessment = 8;
 }
 
 // ---------------------------------------------------------------------------

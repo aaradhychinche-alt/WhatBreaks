@@ -835,3 +835,257 @@ func TestAcceptance_I_ErrorFidelity(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Change-Aware Impact Analysis Boundary Test
+// ---------------------------------------------------------------------------
+
+func TestBoundary_AnalyzeImpact_ChangeAware(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	addr, err := allocateFreeAddr()
+	if err != nil {
+		t.Fatalf("failed to allocate free address: %v", err)
+	}
+
+	server := startManagedServer(t, addr)
+	defer server.Stop()
+
+	client, err := coreclient.Connect(ctx, addr)
+	if err != nil {
+		t.Fatalf("failed to connect to server: %v", err)
+	}
+	defer client.Close()
+
+	workspaceID := "boundary-change-test"
+
+	// Graph topology:
+	// client-x --CALLS--> service-a
+	// service-b --DEPENDS_ON--> service-a
+	// service-c --DEPENDS_ON--> service-b
+	// owner-dep --OWNS--> service-a
+	rel1 := &corev1.Relationship{
+		Source:   &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "client-x"},
+		Target:   &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "service-a"},
+		Kind:     "CALLS",
+		Category: "Invocation",
+	}
+	rel2 := &corev1.Relationship{
+		Source:   &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "service-b"},
+		Target:   &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "service-a"},
+		Kind:     "DEPENDS_ON",
+		Category: "Dependency",
+	}
+	rel3 := &corev1.Relationship{
+		Source:   &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "service-c"},
+		Target:   &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "service-b"},
+		Kind:     "DEPENDS_ON",
+		Category: "Dependency",
+	}
+	rel4 := &corev1.Relationship{
+		Source:   &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "deployment", ProviderId: "owner-dep"},
+		Target:   &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "service-a"},
+		Kind:     "OWNS",
+		Category: "Ownership",
+	}
+
+	_, err = client.LoadState(ctx, &corev1.LoadStateRequest{
+		WorkspaceId:   workspaceID,
+		Relationships: []*corev1.Relationship{rel1, rel2, rel3, rel4},
+	})
+	if err != nil {
+		t.Fatalf("LoadState failed: %v", err)
+	}
+
+	target := &corev1.ResourceIdentity{
+		Provider:     "kubernetes",
+		ResourceType: "service",
+		ProviderId:   "service-a",
+	}
+
+	// 1. DELETE: reaches client-x (depth 1), service-b (depth 1), service-c (depth 2)
+	// owner-dep (OWNS) must NOT be traversed.
+	respDel, err := client.AnalyzeImpact(ctx, &corev1.AnalyzeImpactRequest{
+		Target:      target,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		WorkspaceId: workspaceID,
+		ProposedChange: &corev1.ProposedChange{
+			ChangeType: corev1.ChangeType_CHANGE_TYPE_DELETE,
+			Details:    "deleting service-a",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DELETE failed: %v", err)
+	}
+	if respDel.Summary.ImpactedCount != 3 {
+		t.Errorf("DELETE expected 3 impacted resources, got %d", respDel.Summary.ImpactedCount)
+	}
+	if respDel.ChangeAssessment == nil {
+		t.Fatal("DELETE expected non-nil ChangeAssessment")
+	}
+	if respDel.ChangeAssessment.ChangeType != corev1.ChangeType_CHANGE_TYPE_DELETE {
+		t.Errorf("expected ChangeType DELETE, got %v", respDel.ChangeAssessment.ChangeType)
+	}
+	for _, ir := range respDel.ImpactedResources {
+		if ir.Resource.ProviderId == "owner-dep" {
+			t.Fatalf("OWNS boundary violated: owner-dep found in DELETE impact")
+		}
+	}
+
+	// 2. UPDATE: reaches client-x (depth 1) and service-b (depth 1); service-c (depth 2) is suppressed
+	respUpd, err := client.AnalyzeImpact(ctx, &corev1.AnalyzeImpactRequest{
+		Target:      target,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		WorkspaceId: workspaceID,
+		ProposedChange: &corev1.ProposedChange{
+			ChangeType: corev1.ChangeType_CHANGE_TYPE_UPDATE,
+			Details:    "updating service-a spec",
+		},
+	})
+	if err != nil {
+		t.Fatalf("UPDATE failed: %v", err)
+	}
+	if respUpd.Summary.ImpactedCount != 2 {
+		t.Errorf("UPDATE expected 2 impacted resources (depth 1 only), got %d", respUpd.Summary.ImpactedCount)
+	}
+	for _, ir := range respUpd.ImpactedResources {
+		if ir.Depth != 1 {
+			t.Errorf("UPDATE expected depth 1 only, got depth %d for %s", ir.Depth, ir.Resource.ProviderId)
+		}
+	}
+
+	// 3. SCALE: reaches ONLY client-x (CALLS edge); service-b (DEPENDS_ON) suppressed
+	respScale, err := client.AnalyzeImpact(ctx, &corev1.AnalyzeImpactRequest{
+		Target:      target,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		WorkspaceId: workspaceID,
+		ProposedChange: &corev1.ProposedChange{
+			ChangeType: corev1.ChangeType_CHANGE_TYPE_SCALE,
+			Details:    "scaling service-a replicas",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SCALE failed: %v", err)
+	}
+	if respScale.Summary.ImpactedCount != 1 {
+		t.Errorf("SCALE expected 1 impacted resource (CALLS only), got %d", respScale.Summary.ImpactedCount)
+	}
+	if len(respScale.ImpactedResources) > 0 && respScale.ImpactedResources[0].Resource.ProviderId != "client-x" {
+		t.Errorf("SCALE expected client-x, got %s", respScale.ImpactedResources[0].Resource.ProviderId)
+	}
+
+	// 4. REPLACE: reaches client-x (depth 1) and service-b (depth 1); service-c (depth 2) suppressed
+	respRepl, err := client.AnalyzeImpact(ctx, &corev1.AnalyzeImpactRequest{
+		Target:      target,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		WorkspaceId: workspaceID,
+		ProposedChange: &corev1.ProposedChange{
+			ChangeType: corev1.ChangeType_CHANGE_TYPE_REPLACE,
+			Details:    "recreating instance",
+		},
+	})
+	if err != nil {
+		t.Fatalf("REPLACE failed: %v", err)
+	}
+	if respRepl.Summary.ImpactedCount != 2 {
+		t.Errorf("REPLACE expected 2 impacted resources, got %d", respRepl.Summary.ImpactedCount)
+	}
+
+	// 5. Unspecified ChangeType: rejected with InvalidArgument
+	_, err = client.AnalyzeImpact(ctx, &corev1.AnalyzeImpactRequest{
+		Target:      target,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		WorkspaceId: workspaceID,
+		ProposedChange: &corev1.ProposedChange{
+			ChangeType: corev1.ChangeType_CHANGE_TYPE_UNSPECIFIED,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for unspecified ChangeType, got nil")
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument for unspecified ChangeType, got %v", err)
+	}
+
+	// 6. Unsupported ChangeType value: rejected with InvalidArgument
+	_, err = client.AnalyzeImpact(ctx, &corev1.AnalyzeImpactRequest{
+		Target:      target,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		WorkspaceId: workspaceID,
+		ProposedChange: &corev1.ProposedChange{
+			ChangeType: 999,
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected error for unsupported ChangeType, got nil")
+	}
+	st, ok = status.FromError(err)
+	if !ok || st.Code() != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument for unsupported ChangeType, got %v", err)
+	}
+
+	// 7. Legacy request (proposed_change: nil) preserves legacy multi-hop and empty impact_type
+	respLegacy, err := client.AnalyzeImpact(ctx, &corev1.AnalyzeImpactRequest{
+		Target:      target,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		WorkspaceId: workspaceID,
+	})
+	if err != nil {
+		t.Fatalf("legacy request failed: %v", err)
+	}
+	if respLegacy.Summary.ImpactedCount != 3 {
+		t.Errorf("legacy request expected 3 impacted resources, got %d", respLegacy.Summary.ImpactedCount)
+	}
+	if respLegacy.ChangeAssessment != nil {
+		t.Errorf("legacy request expected nil ChangeAssessment, got %+v", respLegacy.ChangeAssessment)
+	}
+	for _, ir := range respLegacy.ImpactedResources {
+		if ir.ImpactType != "" {
+			t.Errorf("legacy request expected empty ImpactType, got %q", ir.ImpactType)
+		}
+	}
+
+	// 8. SCALE on service-b (has only incoming DEPENDS_ON from service-c, no CALLS) -> 0 impacts + explicit limitation
+	targetB := &corev1.ResourceIdentity{
+		Provider:     "kubernetes",
+		ResourceType: "service",
+		ProviderId:   "service-b",
+	}
+	respScaleB, err := client.AnalyzeImpact(ctx, &corev1.AnalyzeImpactRequest{
+		Target:      targetB,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		WorkspaceId: workspaceID,
+		ProposedChange: &corev1.ProposedChange{
+			ChangeType: corev1.ChangeType_CHANGE_TYPE_SCALE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("SCALE on service-b failed: %v", err)
+	}
+	if respScaleB.Summary.ImpactedCount != 0 {
+		t.Errorf("SCALE on service-b expected 0 impacts, got %d", respScaleB.Summary.ImpactedCount)
+	}
+	if respScaleB.ChangeAssessment == nil {
+		t.Fatal("expected non-nil ChangeAssessment for SCALE on service-b")
+	}
+	hasDepExplanation := false
+	for _, lim := range respScaleB.ChangeAssessment.Limitations {
+		if strings.Contains(lim, "declarative dependencies (e.g. DEPENDS_ON)") && strings.Contains(lim, "no runtime CALLS relationships were observed") {
+			hasDepExplanation = true
+			break
+		}
+	}
+	if !hasDepExplanation {
+		t.Errorf("expected limitation explaining DEPENDS_ON exclusion, got: %+v", respScaleB.ChangeAssessment.Limitations)
+	}
+}

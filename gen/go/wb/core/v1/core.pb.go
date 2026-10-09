@@ -36,6 +36,62 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Supported change types for change-aware impact analysis.
+type ChangeType int32
+
+const (
+	ChangeType_CHANGE_TYPE_UNSPECIFIED ChangeType = 0
+	ChangeType_CHANGE_TYPE_DELETE      ChangeType = 1
+	ChangeType_CHANGE_TYPE_UPDATE      ChangeType = 2
+	ChangeType_CHANGE_TYPE_SCALE       ChangeType = 3
+	ChangeType_CHANGE_TYPE_REPLACE     ChangeType = 4
+)
+
+// Enum value maps for ChangeType.
+var (
+	ChangeType_name = map[int32]string{
+		0: "CHANGE_TYPE_UNSPECIFIED",
+		1: "CHANGE_TYPE_DELETE",
+		2: "CHANGE_TYPE_UPDATE",
+		3: "CHANGE_TYPE_SCALE",
+		4: "CHANGE_TYPE_REPLACE",
+	}
+	ChangeType_value = map[string]int32{
+		"CHANGE_TYPE_UNSPECIFIED": 0,
+		"CHANGE_TYPE_DELETE":      1,
+		"CHANGE_TYPE_UPDATE":      2,
+		"CHANGE_TYPE_SCALE":       3,
+		"CHANGE_TYPE_REPLACE":     4,
+	}
+)
+
+func (x ChangeType) Enum() *ChangeType {
+	p := new(ChangeType)
+	*p = x
+	return p
+}
+
+func (x ChangeType) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ChangeType) Descriptor() protoreflect.EnumDescriptor {
+	return file_wb_core_v1_core_proto_enumTypes[0].Descriptor()
+}
+
+func (ChangeType) Type() protoreflect.EnumType {
+	return &file_wb_core_v1_core_proto_enumTypes[0]
+}
+
+func (x ChangeType) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ChangeType.Descriptor instead.
+func (ChangeType) EnumDescriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{0}
+}
+
 // ---------------------------------------------------------------------------
 // ResourceIdentity
 //
@@ -797,6 +853,128 @@ func (x *RunDiscoveryResponse) GetResults() []*DiscoveryResult {
 	return nil
 }
 
+// Proposed change specified by the caller.
+type ProposedChange struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChangeType    ChangeType             `protobuf:"varint,1,opt,name=change_type,json=changeType,proto3,enum=wb.core.v1.ChangeType" json:"change_type,omitempty"`
+	Details       string                 `protobuf:"bytes,2,opt,name=details,proto3" json:"details,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProposedChange) Reset() {
+	*x = ProposedChange{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProposedChange) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProposedChange) ProtoMessage() {}
+
+func (x *ProposedChange) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProposedChange.ProtoReflect.Descriptor instead.
+func (*ProposedChange) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ProposedChange) GetChangeType() ChangeType {
+	if x != nil {
+		return x.ChangeType
+	}
+	return ChangeType_CHANGE_TYPE_UNSPECIFIED
+}
+
+func (x *ProposedChange) GetDetails() string {
+	if x != nil {
+		return x.Details
+	}
+	return ""
+}
+
+// Deterministic assessment of the proposed change's nature, assumptions, and limitations.
+type ChangeAssessment struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ChangeType    ChangeType             `protobuf:"varint,1,opt,name=change_type,json=changeType,proto3,enum=wb.core.v1.ChangeType" json:"change_type,omitempty"`
+	ImpactNature  string                 `protobuf:"bytes,2,opt,name=impact_nature,json=impactNature,proto3" json:"impact_nature,omitempty"` // e.g. "POTENTIAL_IMPACT"
+	Assumptions   []string               `protobuf:"bytes,3,rep,name=assumptions,proto3" json:"assumptions,omitempty"`
+	Limitations   []string               `protobuf:"bytes,4,rep,name=limitations,proto3" json:"limitations,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChangeAssessment) Reset() {
+	*x = ChangeAssessment{}
+	mi := &file_wb_core_v1_core_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChangeAssessment) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChangeAssessment) ProtoMessage() {}
+
+func (x *ChangeAssessment) ProtoReflect() protoreflect.Message {
+	mi := &file_wb_core_v1_core_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChangeAssessment.ProtoReflect.Descriptor instead.
+func (*ChangeAssessment) Descriptor() ([]byte, []int) {
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ChangeAssessment) GetChangeType() ChangeType {
+	if x != nil {
+		return x.ChangeType
+	}
+	return ChangeType_CHANGE_TYPE_UNSPECIFIED
+}
+
+func (x *ChangeAssessment) GetImpactNature() string {
+	if x != nil {
+		return x.ImpactNature
+	}
+	return ""
+}
+
+func (x *ChangeAssessment) GetAssumptions() []string {
+	if x != nil {
+		return x.Assumptions
+	}
+	return nil
+}
+
+func (x *ChangeAssessment) GetLimitations() []string {
+	if x != nil {
+		return x.Limitations
+	}
+	return nil
+}
+
 // A request to compute the candidate blast radius and structured explanation.
 type AnalyzeImpactRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -807,14 +985,16 @@ type AnalyzeImpactRequest struct {
 	// Maximum hop depth to explore (must be >= 1).
 	MaxDepth uint32 `protobuf:"varint,3,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"`
 	// Workspace scope for tenant isolation (optional, empty defaults to default tenant).
-	WorkspaceId   string `protobuf:"bytes,4,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	WorkspaceId string `protobuf:"bytes,4,opt,name=workspace_id,json=workspaceId,proto3" json:"workspace_id,omitempty"`
+	// Proposed change intent for change-aware impact analysis (optional).
+	ProposedChange *ProposedChange `protobuf:"bytes,5,opt,name=proposed_change,json=proposedChange,proto3" json:"proposed_change,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *AnalyzeImpactRequest) Reset() {
 	*x = AnalyzeImpactRequest{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[11]
+	mi := &file_wb_core_v1_core_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -826,7 +1006,7 @@ func (x *AnalyzeImpactRequest) String() string {
 func (*AnalyzeImpactRequest) ProtoMessage() {}
 
 func (x *AnalyzeImpactRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[11]
+	mi := &file_wb_core_v1_core_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -839,7 +1019,7 @@ func (x *AnalyzeImpactRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnalyzeImpactRequest.ProtoReflect.Descriptor instead.
 func (*AnalyzeImpactRequest) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{11}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AnalyzeImpactRequest) GetTarget() *ResourceIdentity {
@@ -870,6 +1050,13 @@ func (x *AnalyzeImpactRequest) GetWorkspaceId() string {
 	return ""
 }
 
+func (x *AnalyzeImpactRequest) GetProposedChange() *ProposedChange {
+	if x != nil {
+		return x.ProposedChange
+	}
+	return nil
+}
+
 // Deterministic aggregate facts summarizing the candidate blast radius.
 type ImpactSummary struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -883,7 +1070,7 @@ type ImpactSummary struct {
 
 func (x *ImpactSummary) Reset() {
 	*x = ImpactSummary{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[12]
+	mi := &file_wb_core_v1_core_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -895,7 +1082,7 @@ func (x *ImpactSummary) String() string {
 func (*ImpactSummary) ProtoMessage() {}
 
 func (x *ImpactSummary) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[12]
+	mi := &file_wb_core_v1_core_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -908,7 +1095,7 @@ func (x *ImpactSummary) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImpactSummary.ProtoReflect.Descriptor instead.
 func (*ImpactSummary) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{12}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ImpactSummary) GetImpactedCount() uint32 {
@@ -944,13 +1131,15 @@ type ImpactedResource struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Resource      *ResourceIdentity      `protobuf:"bytes,1,opt,name=resource,proto3" json:"resource,omitempty"`
 	Depth         uint32                 `protobuf:"varint,2,opt,name=depth,proto3" json:"depth,omitempty"`
+	ImpactType    string                 `protobuf:"bytes,3,opt,name=impact_type,json=impactType,proto3" json:"impact_type,omitempty"`       // "DIRECT" or "INDIRECT"
+	ImpactReason  string                 `protobuf:"bytes,4,opt,name=impact_reason,json=impactReason,proto3" json:"impact_reason,omitempty"` // Factual explanation of why this resource is impacted under the proposed change
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ImpactedResource) Reset() {
 	*x = ImpactedResource{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[13]
+	mi := &file_wb_core_v1_core_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -962,7 +1151,7 @@ func (x *ImpactedResource) String() string {
 func (*ImpactedResource) ProtoMessage() {}
 
 func (x *ImpactedResource) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[13]
+	mi := &file_wb_core_v1_core_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -975,7 +1164,7 @@ func (x *ImpactedResource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImpactedResource.ProtoReflect.Descriptor instead.
 func (*ImpactedResource) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{13}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ImpactedResource) GetResource() *ResourceIdentity {
@@ -992,6 +1181,20 @@ func (x *ImpactedResource) GetDepth() uint32 {
 	return 0
 }
 
+func (x *ImpactedResource) GetImpactType() string {
+	if x != nil {
+		return x.ImpactType
+	}
+	return ""
+}
+
+func (x *ImpactedResource) GetImpactReason() string {
+	if x != nil {
+		return x.ImpactReason
+	}
+	return ""
+}
+
 // An infrastructure relationship with its derived operational state and supporting evidence IDs.
 type AnswerRelationship struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1004,7 +1207,7 @@ type AnswerRelationship struct {
 
 func (x *AnswerRelationship) Reset() {
 	*x = AnswerRelationship{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[14]
+	mi := &file_wb_core_v1_core_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1016,7 +1219,7 @@ func (x *AnswerRelationship) String() string {
 func (*AnswerRelationship) ProtoMessage() {}
 
 func (x *AnswerRelationship) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[14]
+	mi := &file_wb_core_v1_core_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1029,7 +1232,7 @@ func (x *AnswerRelationship) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerRelationship.ProtoReflect.Descriptor instead.
 func (*AnswerRelationship) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{14}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *AnswerRelationship) GetRelationship() *Relationship {
@@ -1064,7 +1267,7 @@ type ImpactPath struct {
 
 func (x *ImpactPath) Reset() {
 	*x = ImpactPath{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[15]
+	mi := &file_wb_core_v1_core_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1076,7 +1279,7 @@ func (x *ImpactPath) String() string {
 func (*ImpactPath) ProtoMessage() {}
 
 func (x *ImpactPath) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[15]
+	mi := &file_wb_core_v1_core_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1089,7 +1292,7 @@ func (x *ImpactPath) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImpactPath.ProtoReflect.Descriptor instead.
 func (*ImpactPath) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{15}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ImpactPath) GetResources() []*ResourceIdentity {
@@ -1119,7 +1322,7 @@ type AnswerEvidence struct {
 
 func (x *AnswerEvidence) Reset() {
 	*x = AnswerEvidence{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[16]
+	mi := &file_wb_core_v1_core_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1131,7 +1334,7 @@ func (x *AnswerEvidence) String() string {
 func (*AnswerEvidence) ProtoMessage() {}
 
 func (x *AnswerEvidence) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[16]
+	mi := &file_wb_core_v1_core_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1144,7 +1347,7 @@ func (x *AnswerEvidence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnswerEvidence.ProtoReflect.Descriptor instead.
 func (*AnswerEvidence) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{16}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AnswerEvidence) GetId() string {
@@ -1187,7 +1390,7 @@ type ExplanationFact struct {
 
 func (x *ExplanationFact) Reset() {
 	*x = ExplanationFact{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[17]
+	mi := &file_wb_core_v1_core_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1199,7 +1402,7 @@ func (x *ExplanationFact) String() string {
 func (*ExplanationFact) ProtoMessage() {}
 
 func (x *ExplanationFact) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[17]
+	mi := &file_wb_core_v1_core_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1212,7 +1415,7 @@ func (x *ExplanationFact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExplanationFact.ProtoReflect.Descriptor instead.
 func (*ExplanationFact) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{17}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ExplanationFact) GetPath() *ImpactPath {
@@ -1246,13 +1449,14 @@ type AnalyzeImpactResponse struct {
 	Paths             []*ImpactPath          `protobuf:"bytes,5,rep,name=paths,proto3" json:"paths,omitempty"`
 	Evidence          []*AnswerEvidence      `protobuf:"bytes,6,rep,name=evidence,proto3" json:"evidence,omitempty"`
 	ExplanationFacts  []*ExplanationFact     `protobuf:"bytes,7,rep,name=explanation_facts,json=explanationFacts,proto3" json:"explanation_facts,omitempty"`
+	ChangeAssessment  *ChangeAssessment      `protobuf:"bytes,8,opt,name=change_assessment,json=changeAssessment,proto3" json:"change_assessment,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AnalyzeImpactResponse) Reset() {
 	*x = AnalyzeImpactResponse{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[18]
+	mi := &file_wb_core_v1_core_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1264,7 +1468,7 @@ func (x *AnalyzeImpactResponse) String() string {
 func (*AnalyzeImpactResponse) ProtoMessage() {}
 
 func (x *AnalyzeImpactResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[18]
+	mi := &file_wb_core_v1_core_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1277,7 +1481,7 @@ func (x *AnalyzeImpactResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnalyzeImpactResponse.ProtoReflect.Descriptor instead.
 func (*AnalyzeImpactResponse) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{18}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AnalyzeImpactResponse) GetTarget() *ResourceIdentity {
@@ -1329,6 +1533,13 @@ func (x *AnalyzeImpactResponse) GetExplanationFacts() []*ExplanationFact {
 	return nil
 }
 
+func (x *AnalyzeImpactResponse) GetChangeAssessment() *ChangeAssessment {
+	if x != nil {
+		return x.ChangeAssessment
+	}
+	return nil
+}
+
 // Association between a relationship and its supporting evidence observations.
 type RelationshipEvidence struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1340,7 +1551,7 @@ type RelationshipEvidence struct {
 
 func (x *RelationshipEvidence) Reset() {
 	*x = RelationshipEvidence{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[19]
+	mi := &file_wb_core_v1_core_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1352,7 +1563,7 @@ func (x *RelationshipEvidence) String() string {
 func (*RelationshipEvidence) ProtoMessage() {}
 
 func (x *RelationshipEvidence) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[19]
+	mi := &file_wb_core_v1_core_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1365,7 +1576,7 @@ func (x *RelationshipEvidence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RelationshipEvidence.ProtoReflect.Descriptor instead.
 func (*RelationshipEvidence) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{19}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *RelationshipEvidence) GetRelationship() *Relationship {
@@ -1399,7 +1610,7 @@ type LoadStateRequest struct {
 
 func (x *LoadStateRequest) Reset() {
 	*x = LoadStateRequest{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[20]
+	mi := &file_wb_core_v1_core_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1411,7 +1622,7 @@ func (x *LoadStateRequest) String() string {
 func (*LoadStateRequest) ProtoMessage() {}
 
 func (x *LoadStateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[20]
+	mi := &file_wb_core_v1_core_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1424,7 +1635,7 @@ func (x *LoadStateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoadStateRequest.ProtoReflect.Descriptor instead.
 func (*LoadStateRequest) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{20}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *LoadStateRequest) GetWorkspaceId() string {
@@ -1468,7 +1679,7 @@ type LoadStateResponse struct {
 
 func (x *LoadStateResponse) Reset() {
 	*x = LoadStateResponse{}
-	mi := &file_wb_core_v1_core_proto_msgTypes[21]
+	mi := &file_wb_core_v1_core_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1480,7 +1691,7 @@ func (x *LoadStateResponse) String() string {
 func (*LoadStateResponse) ProtoMessage() {}
 
 func (x *LoadStateResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wb_core_v1_core_proto_msgTypes[21]
+	mi := &file_wb_core_v1_core_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1493,7 +1704,7 @@ func (x *LoadStateResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LoadStateResponse.ProtoReflect.Descriptor instead.
 func (*LoadStateResponse) Descriptor() ([]byte, []int) {
-	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{21}
+	return file_wb_core_v1_core_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *LoadStateResponse) GetWorkspaceId() string {
@@ -1570,20 +1781,34 @@ const file_wb_core_v1_core_proto_rawDesc = "" +
 	"\x13RunDiscoveryRequest\x120\n" +
 	"\bevidence\x18\x01 \x03(\v2\x14.wb.core.v1.EvidenceR\bevidence\"M\n" +
 	"\x14RunDiscoveryResponse\x125\n" +
-	"\aresults\x18\x01 \x03(\v2\x1b.wb.core.v1.DiscoveryResultR\aresults\"\xaa\x01\n" +
+	"\aresults\x18\x01 \x03(\v2\x1b.wb.core.v1.DiscoveryResultR\aresults\"c\n" +
+	"\x0eProposedChange\x127\n" +
+	"\vchange_type\x18\x01 \x01(\x0e2\x16.wb.core.v1.ChangeTypeR\n" +
+	"changeType\x12\x18\n" +
+	"\adetails\x18\x02 \x01(\tR\adetails\"\xb4\x01\n" +
+	"\x10ChangeAssessment\x127\n" +
+	"\vchange_type\x18\x01 \x01(\x0e2\x16.wb.core.v1.ChangeTypeR\n" +
+	"changeType\x12#\n" +
+	"\rimpact_nature\x18\x02 \x01(\tR\fimpactNature\x12 \n" +
+	"\vassumptions\x18\x03 \x03(\tR\vassumptions\x12 \n" +
+	"\vlimitations\x18\x04 \x03(\tR\vlimitations\"\xef\x01\n" +
 	"\x14AnalyzeImpactRequest\x124\n" +
 	"\x06target\x18\x01 \x01(\v2\x1c.wb.core.v1.ResourceIdentityR\x06target\x12\x1c\n" +
 	"\tdirection\x18\x02 \x01(\tR\tdirection\x12\x1b\n" +
 	"\tmax_depth\x18\x03 \x01(\rR\bmaxDepth\x12!\n" +
-	"\fworkspace_id\x18\x04 \x01(\tR\vworkspaceId\"\x9d\x01\n" +
+	"\fworkspace_id\x18\x04 \x01(\tR\vworkspaceId\x12C\n" +
+	"\x0fproposed_change\x18\x05 \x01(\v2\x1a.wb.core.v1.ProposedChangeR\x0eproposedChange\"\x9d\x01\n" +
 	"\rImpactSummary\x12%\n" +
 	"\x0eimpacted_count\x18\x01 \x01(\rR\rimpactedCount\x12!\n" +
 	"\fdirect_count\x18\x02 \x01(\rR\vdirectCount\x12%\n" +
 	"\x0eindirect_count\x18\x03 \x01(\rR\rindirectCount\x12\x1b\n" +
-	"\tmax_depth\x18\x04 \x01(\rR\bmaxDepth\"b\n" +
+	"\tmax_depth\x18\x04 \x01(\rR\bmaxDepth\"\xa8\x01\n" +
 	"\x10ImpactedResource\x128\n" +
 	"\bresource\x18\x01 \x01(\v2\x1c.wb.core.v1.ResourceIdentityR\bresource\x12\x14\n" +
-	"\x05depth\x18\x02 \x01(\rR\x05depth\"\x8b\x01\n" +
+	"\x05depth\x18\x02 \x01(\rR\x05depth\x12\x1f\n" +
+	"\vimpact_type\x18\x03 \x01(\tR\n" +
+	"impactType\x12#\n" +
+	"\rimpact_reason\x18\x04 \x01(\tR\fimpactReason\"\x8b\x01\n" +
 	"\x12AnswerRelationship\x12<\n" +
 	"\frelationship\x18\x01 \x01(\v2\x18.wb.core.v1.RelationshipR\frelationship\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12!\n" +
@@ -1601,7 +1826,7 @@ const file_wb_core_v1_core_proto_rawDesc = "" +
 	"\x0fExplanationFact\x12*\n" +
 	"\x04path\x18\x01 \x01(\v2\x16.wb.core.v1.ImpactPathR\x04path\x12D\n" +
 	"\rrelationships\x18\x02 \x03(\v2\x1e.wb.core.v1.AnswerRelationshipR\rrelationships\x12!\n" +
-	"\fevidence_ids\x18\x03 \x03(\tR\vevidenceIds\"\xc5\x03\n" +
+	"\fevidence_ids\x18\x03 \x03(\tR\vevidenceIds\"\x90\x04\n" +
 	"\x15AnalyzeImpactResponse\x124\n" +
 	"\x06target\x18\x01 \x01(\v2\x1c.wb.core.v1.ResourceIdentityR\x06target\x123\n" +
 	"\asummary\x18\x02 \x01(\v2\x19.wb.core.v1.ImpactSummaryR\asummary\x12K\n" +
@@ -1609,7 +1834,8 @@ const file_wb_core_v1_core_proto_rawDesc = "" +
 	"\rrelationships\x18\x04 \x03(\v2\x1e.wb.core.v1.AnswerRelationshipR\rrelationships\x12,\n" +
 	"\x05paths\x18\x05 \x03(\v2\x16.wb.core.v1.ImpactPathR\x05paths\x126\n" +
 	"\bevidence\x18\x06 \x03(\v2\x1a.wb.core.v1.AnswerEvidenceR\bevidence\x12H\n" +
-	"\x11explanation_facts\x18\a \x03(\v2\x1b.wb.core.v1.ExplanationFactR\x10explanationFacts\"w\n" +
+	"\x11explanation_facts\x18\a \x03(\v2\x1b.wb.core.v1.ExplanationFactR\x10explanationFacts\x12I\n" +
+	"\x11change_assessment\x18\b \x01(\v2\x1c.wb.core.v1.ChangeAssessmentR\x10changeAssessment\"w\n" +
 	"\x14RelationshipEvidence\x12<\n" +
 	"\frelationship\x18\x01 \x01(\v2\x18.wb.core.v1.RelationshipR\frelationship\x12!\n" +
 	"\fevidence_ids\x18\x02 \x03(\tR\vevidenceIds\"\xed\x01\n" +
@@ -1622,7 +1848,14 @@ const file_wb_core_v1_core_proto_rawDesc = "" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x121\n" +
 	"\x14relationships_loaded\x18\x02 \x01(\rR\x13relationshipsLoaded\x12'\n" +
 	"\x0fevidence_loaded\x18\x03 \x01(\rR\x0eevidenceLoaded\x126\n" +
-	"\x17provenance_links_loaded\x18\x04 \x01(\rR\x15provenanceLinksLoaded2e\n" +
+	"\x17provenance_links_loaded\x18\x04 \x01(\rR\x15provenanceLinksLoaded*\x89\x01\n" +
+	"\n" +
+	"ChangeType\x12\x1b\n" +
+	"\x17CHANGE_TYPE_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12CHANGE_TYPE_DELETE\x10\x01\x12\x16\n" +
+	"\x12CHANGE_TYPE_UPDATE\x10\x02\x12\x15\n" +
+	"\x11CHANGE_TYPE_SCALE\x10\x03\x12\x17\n" +
+	"\x13CHANGE_TYPE_REPLACE\x10\x042e\n" +
 	"\x10DiscoveryService\x12Q\n" +
 	"\fRunDiscovery\x12\x1f.wb.core.v1.RunDiscoveryRequest\x1a .wb.core.v1.RunDiscoveryResponse2\xaf\x01\n" +
 	"\rAnswerService\x12T\n" +
@@ -1641,73 +1874,81 @@ func file_wb_core_v1_core_proto_rawDescGZIP() []byte {
 	return file_wb_core_v1_core_proto_rawDescData
 }
 
-var file_wb_core_v1_core_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_wb_core_v1_core_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_wb_core_v1_core_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_wb_core_v1_core_proto_goTypes = []any{
-	(*ResourceIdentity)(nil),       // 0: wb.core.v1.ResourceIdentity
-	(*EvidenceSource)(nil),         // 1: wb.core.v1.EvidenceSource
-	(*Evidence)(nil),               // 2: wb.core.v1.Evidence
-	(*Relationship)(nil),           // 3: wb.core.v1.Relationship
-	(*DiscoveredRelationship)(nil), // 4: wb.core.v1.DiscoveredRelationship
-	(*DiscoveryResult)(nil),        // 5: wb.core.v1.DiscoveryResult
-	(*Insufficient)(nil),           // 6: wb.core.v1.Insufficient
-	(*Conflict)(nil),               // 7: wb.core.v1.Conflict
-	(*Invalid)(nil),                // 8: wb.core.v1.Invalid
-	(*RunDiscoveryRequest)(nil),    // 9: wb.core.v1.RunDiscoveryRequest
-	(*RunDiscoveryResponse)(nil),   // 10: wb.core.v1.RunDiscoveryResponse
-	(*AnalyzeImpactRequest)(nil),   // 11: wb.core.v1.AnalyzeImpactRequest
-	(*ImpactSummary)(nil),          // 12: wb.core.v1.ImpactSummary
-	(*ImpactedResource)(nil),       // 13: wb.core.v1.ImpactedResource
-	(*AnswerRelationship)(nil),     // 14: wb.core.v1.AnswerRelationship
-	(*ImpactPath)(nil),             // 15: wb.core.v1.ImpactPath
-	(*AnswerEvidence)(nil),         // 16: wb.core.v1.AnswerEvidence
-	(*ExplanationFact)(nil),        // 17: wb.core.v1.ExplanationFact
-	(*AnalyzeImpactResponse)(nil),  // 18: wb.core.v1.AnalyzeImpactResponse
-	(*RelationshipEvidence)(nil),   // 19: wb.core.v1.RelationshipEvidence
-	(*LoadStateRequest)(nil),       // 20: wb.core.v1.LoadStateRequest
-	(*LoadStateResponse)(nil),      // 21: wb.core.v1.LoadStateResponse
+	(ChangeType)(0),                // 0: wb.core.v1.ChangeType
+	(*ResourceIdentity)(nil),       // 1: wb.core.v1.ResourceIdentity
+	(*EvidenceSource)(nil),         // 2: wb.core.v1.EvidenceSource
+	(*Evidence)(nil),               // 3: wb.core.v1.Evidence
+	(*Relationship)(nil),           // 4: wb.core.v1.Relationship
+	(*DiscoveredRelationship)(nil), // 5: wb.core.v1.DiscoveredRelationship
+	(*DiscoveryResult)(nil),        // 6: wb.core.v1.DiscoveryResult
+	(*Insufficient)(nil),           // 7: wb.core.v1.Insufficient
+	(*Conflict)(nil),               // 8: wb.core.v1.Conflict
+	(*Invalid)(nil),                // 9: wb.core.v1.Invalid
+	(*RunDiscoveryRequest)(nil),    // 10: wb.core.v1.RunDiscoveryRequest
+	(*RunDiscoveryResponse)(nil),   // 11: wb.core.v1.RunDiscoveryResponse
+	(*ProposedChange)(nil),         // 12: wb.core.v1.ProposedChange
+	(*ChangeAssessment)(nil),       // 13: wb.core.v1.ChangeAssessment
+	(*AnalyzeImpactRequest)(nil),   // 14: wb.core.v1.AnalyzeImpactRequest
+	(*ImpactSummary)(nil),          // 15: wb.core.v1.ImpactSummary
+	(*ImpactedResource)(nil),       // 16: wb.core.v1.ImpactedResource
+	(*AnswerRelationship)(nil),     // 17: wb.core.v1.AnswerRelationship
+	(*ImpactPath)(nil),             // 18: wb.core.v1.ImpactPath
+	(*AnswerEvidence)(nil),         // 19: wb.core.v1.AnswerEvidence
+	(*ExplanationFact)(nil),        // 20: wb.core.v1.ExplanationFact
+	(*AnalyzeImpactResponse)(nil),  // 21: wb.core.v1.AnalyzeImpactResponse
+	(*RelationshipEvidence)(nil),   // 22: wb.core.v1.RelationshipEvidence
+	(*LoadStateRequest)(nil),       // 23: wb.core.v1.LoadStateRequest
+	(*LoadStateResponse)(nil),      // 24: wb.core.v1.LoadStateResponse
 }
 var file_wb_core_v1_core_proto_depIdxs = []int32{
-	1,  // 0: wb.core.v1.Evidence.source:type_name -> wb.core.v1.EvidenceSource
-	0,  // 1: wb.core.v1.Evidence.subject:type_name -> wb.core.v1.ResourceIdentity
-	0,  // 2: wb.core.v1.Relationship.source:type_name -> wb.core.v1.ResourceIdentity
-	0,  // 3: wb.core.v1.Relationship.target:type_name -> wb.core.v1.ResourceIdentity
-	3,  // 4: wb.core.v1.DiscoveredRelationship.relationship:type_name -> wb.core.v1.Relationship
-	4,  // 5: wb.core.v1.DiscoveryResult.discovered:type_name -> wb.core.v1.DiscoveredRelationship
-	6,  // 6: wb.core.v1.DiscoveryResult.insufficient:type_name -> wb.core.v1.Insufficient
-	7,  // 7: wb.core.v1.DiscoveryResult.conflict:type_name -> wb.core.v1.Conflict
-	8,  // 8: wb.core.v1.DiscoveryResult.invalid:type_name -> wb.core.v1.Invalid
-	2,  // 9: wb.core.v1.RunDiscoveryRequest.evidence:type_name -> wb.core.v1.Evidence
-	5,  // 10: wb.core.v1.RunDiscoveryResponse.results:type_name -> wb.core.v1.DiscoveryResult
-	0,  // 11: wb.core.v1.AnalyzeImpactRequest.target:type_name -> wb.core.v1.ResourceIdentity
-	0,  // 12: wb.core.v1.ImpactedResource.resource:type_name -> wb.core.v1.ResourceIdentity
-	3,  // 13: wb.core.v1.AnswerRelationship.relationship:type_name -> wb.core.v1.Relationship
-	0,  // 14: wb.core.v1.ImpactPath.resources:type_name -> wb.core.v1.ResourceIdentity
-	3,  // 15: wb.core.v1.ImpactPath.relationships:type_name -> wb.core.v1.Relationship
-	1,  // 16: wb.core.v1.AnswerEvidence.source:type_name -> wb.core.v1.EvidenceSource
-	15, // 17: wb.core.v1.ExplanationFact.path:type_name -> wb.core.v1.ImpactPath
-	14, // 18: wb.core.v1.ExplanationFact.relationships:type_name -> wb.core.v1.AnswerRelationship
-	0,  // 19: wb.core.v1.AnalyzeImpactResponse.target:type_name -> wb.core.v1.ResourceIdentity
-	12, // 20: wb.core.v1.AnalyzeImpactResponse.summary:type_name -> wb.core.v1.ImpactSummary
-	13, // 21: wb.core.v1.AnalyzeImpactResponse.impacted_resources:type_name -> wb.core.v1.ImpactedResource
-	14, // 22: wb.core.v1.AnalyzeImpactResponse.relationships:type_name -> wb.core.v1.AnswerRelationship
-	15, // 23: wb.core.v1.AnalyzeImpactResponse.paths:type_name -> wb.core.v1.ImpactPath
-	16, // 24: wb.core.v1.AnalyzeImpactResponse.evidence:type_name -> wb.core.v1.AnswerEvidence
-	17, // 25: wb.core.v1.AnalyzeImpactResponse.explanation_facts:type_name -> wb.core.v1.ExplanationFact
-	3,  // 26: wb.core.v1.RelationshipEvidence.relationship:type_name -> wb.core.v1.Relationship
-	3,  // 27: wb.core.v1.LoadStateRequest.relationships:type_name -> wb.core.v1.Relationship
-	19, // 28: wb.core.v1.LoadStateRequest.associations:type_name -> wb.core.v1.RelationshipEvidence
-	2,  // 29: wb.core.v1.LoadStateRequest.evidence:type_name -> wb.core.v1.Evidence
-	9,  // 30: wb.core.v1.DiscoveryService.RunDiscovery:input_type -> wb.core.v1.RunDiscoveryRequest
-	11, // 31: wb.core.v1.AnswerService.AnalyzeImpact:input_type -> wb.core.v1.AnalyzeImpactRequest
-	20, // 32: wb.core.v1.AnswerService.LoadState:input_type -> wb.core.v1.LoadStateRequest
-	10, // 33: wb.core.v1.DiscoveryService.RunDiscovery:output_type -> wb.core.v1.RunDiscoveryResponse
-	18, // 34: wb.core.v1.AnswerService.AnalyzeImpact:output_type -> wb.core.v1.AnalyzeImpactResponse
-	21, // 35: wb.core.v1.AnswerService.LoadState:output_type -> wb.core.v1.LoadStateResponse
-	33, // [33:36] is the sub-list for method output_type
-	30, // [30:33] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	2,  // 0: wb.core.v1.Evidence.source:type_name -> wb.core.v1.EvidenceSource
+	1,  // 1: wb.core.v1.Evidence.subject:type_name -> wb.core.v1.ResourceIdentity
+	1,  // 2: wb.core.v1.Relationship.source:type_name -> wb.core.v1.ResourceIdentity
+	1,  // 3: wb.core.v1.Relationship.target:type_name -> wb.core.v1.ResourceIdentity
+	4,  // 4: wb.core.v1.DiscoveredRelationship.relationship:type_name -> wb.core.v1.Relationship
+	5,  // 5: wb.core.v1.DiscoveryResult.discovered:type_name -> wb.core.v1.DiscoveredRelationship
+	7,  // 6: wb.core.v1.DiscoveryResult.insufficient:type_name -> wb.core.v1.Insufficient
+	8,  // 7: wb.core.v1.DiscoveryResult.conflict:type_name -> wb.core.v1.Conflict
+	9,  // 8: wb.core.v1.DiscoveryResult.invalid:type_name -> wb.core.v1.Invalid
+	3,  // 9: wb.core.v1.RunDiscoveryRequest.evidence:type_name -> wb.core.v1.Evidence
+	6,  // 10: wb.core.v1.RunDiscoveryResponse.results:type_name -> wb.core.v1.DiscoveryResult
+	0,  // 11: wb.core.v1.ProposedChange.change_type:type_name -> wb.core.v1.ChangeType
+	0,  // 12: wb.core.v1.ChangeAssessment.change_type:type_name -> wb.core.v1.ChangeType
+	1,  // 13: wb.core.v1.AnalyzeImpactRequest.target:type_name -> wb.core.v1.ResourceIdentity
+	12, // 14: wb.core.v1.AnalyzeImpactRequest.proposed_change:type_name -> wb.core.v1.ProposedChange
+	1,  // 15: wb.core.v1.ImpactedResource.resource:type_name -> wb.core.v1.ResourceIdentity
+	4,  // 16: wb.core.v1.AnswerRelationship.relationship:type_name -> wb.core.v1.Relationship
+	1,  // 17: wb.core.v1.ImpactPath.resources:type_name -> wb.core.v1.ResourceIdentity
+	4,  // 18: wb.core.v1.ImpactPath.relationships:type_name -> wb.core.v1.Relationship
+	2,  // 19: wb.core.v1.AnswerEvidence.source:type_name -> wb.core.v1.EvidenceSource
+	18, // 20: wb.core.v1.ExplanationFact.path:type_name -> wb.core.v1.ImpactPath
+	17, // 21: wb.core.v1.ExplanationFact.relationships:type_name -> wb.core.v1.AnswerRelationship
+	1,  // 22: wb.core.v1.AnalyzeImpactResponse.target:type_name -> wb.core.v1.ResourceIdentity
+	15, // 23: wb.core.v1.AnalyzeImpactResponse.summary:type_name -> wb.core.v1.ImpactSummary
+	16, // 24: wb.core.v1.AnalyzeImpactResponse.impacted_resources:type_name -> wb.core.v1.ImpactedResource
+	17, // 25: wb.core.v1.AnalyzeImpactResponse.relationships:type_name -> wb.core.v1.AnswerRelationship
+	18, // 26: wb.core.v1.AnalyzeImpactResponse.paths:type_name -> wb.core.v1.ImpactPath
+	19, // 27: wb.core.v1.AnalyzeImpactResponse.evidence:type_name -> wb.core.v1.AnswerEvidence
+	20, // 28: wb.core.v1.AnalyzeImpactResponse.explanation_facts:type_name -> wb.core.v1.ExplanationFact
+	13, // 29: wb.core.v1.AnalyzeImpactResponse.change_assessment:type_name -> wb.core.v1.ChangeAssessment
+	4,  // 30: wb.core.v1.RelationshipEvidence.relationship:type_name -> wb.core.v1.Relationship
+	4,  // 31: wb.core.v1.LoadStateRequest.relationships:type_name -> wb.core.v1.Relationship
+	22, // 32: wb.core.v1.LoadStateRequest.associations:type_name -> wb.core.v1.RelationshipEvidence
+	3,  // 33: wb.core.v1.LoadStateRequest.evidence:type_name -> wb.core.v1.Evidence
+	10, // 34: wb.core.v1.DiscoveryService.RunDiscovery:input_type -> wb.core.v1.RunDiscoveryRequest
+	14, // 35: wb.core.v1.AnswerService.AnalyzeImpact:input_type -> wb.core.v1.AnalyzeImpactRequest
+	23, // 36: wb.core.v1.AnswerService.LoadState:input_type -> wb.core.v1.LoadStateRequest
+	11, // 37: wb.core.v1.DiscoveryService.RunDiscovery:output_type -> wb.core.v1.RunDiscoveryResponse
+	21, // 38: wb.core.v1.AnswerService.AnalyzeImpact:output_type -> wb.core.v1.AnalyzeImpactResponse
+	24, // 39: wb.core.v1.AnswerService.LoadState:output_type -> wb.core.v1.LoadStateResponse
+	37, // [37:40] is the sub-list for method output_type
+	34, // [34:37] is the sub-list for method input_type
+	34, // [34:34] is the sub-list for extension type_name
+	34, // [34:34] is the sub-list for extension extendee
+	0,  // [0:34] is the sub-list for field type_name
 }
 
 func init() { file_wb_core_v1_core_proto_init() }
@@ -1726,13 +1967,14 @@ func file_wb_core_v1_core_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wb_core_v1_core_proto_rawDesc), len(file_wb_core_v1_core_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   22,
+			NumEnums:      1,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   2,
 		},
 		GoTypes:           file_wb_core_v1_core_proto_goTypes,
 		DependencyIndexes: file_wb_core_v1_core_proto_depIdxs,
+		EnumInfos:         file_wb_core_v1_core_proto_enumTypes,
 		MessageInfos:      file_wb_core_v1_core_proto_msgTypes,
 	}.Build()
 	File_wb_core_v1_core_proto = out.File

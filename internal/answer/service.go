@@ -48,15 +48,41 @@ func (s *service) AnalyzeImpact(ctx context.Context, req ImpactRequest) (*Impact
 	}
 
 	start := time.Now()
+
+	var protoChange *corev1.ProposedChange
+	if req.ProposedChange != nil {
+		var protoCT corev1.ChangeType
+		switch req.ProposedChange.ChangeType {
+		case ChangeTypeDelete:
+			protoCT = corev1.ChangeType_CHANGE_TYPE_DELETE
+		case ChangeTypeUpdate:
+			protoCT = corev1.ChangeType_CHANGE_TYPE_UPDATE
+		case ChangeTypeScale:
+			protoCT = corev1.ChangeType_CHANGE_TYPE_SCALE
+		case ChangeTypeReplace:
+			protoCT = corev1.ChangeType_CHANGE_TYPE_REPLACE
+		default:
+			return nil, &ValidationError{
+				Field:   "proposed_change.change_type",
+				Message: fmt.Sprintf("unsupported change_type %q: must be DELETE, UPDATE, SCALE, or REPLACE", req.ProposedChange.ChangeType),
+			}
+		}
+		protoChange = &corev1.ProposedChange{
+			ChangeType: protoCT,
+			Details:    req.ProposedChange.Details,
+		}
+	}
+
 	protoReq := &corev1.AnalyzeImpactRequest{
 		Target: &corev1.ResourceIdentity{
 			Provider:     req.Target.Provider,
 			ResourceType: req.Target.ResourceType,
 			ProviderId:   req.Target.ProviderID,
 		},
-		Direction:   strings.ToLower(strings.TrimSpace(req.Direction)),
-		MaxDepth:    req.MaxDepth,
-		WorkspaceId: req.WorkspaceID,
+		Direction:      strings.ToLower(strings.TrimSpace(req.Direction)),
+		MaxDepth:       req.MaxDepth,
+		WorkspaceId:    req.WorkspaceID,
+		ProposedChange: protoChange,
 	}
 
 	protoResp, err := s.client.AnalyzeImpact(ctx, protoReq)
@@ -146,8 +172,10 @@ func transformProtoResponse(resp *corev1.AnalyzeImpactResponse) *ImpactAnswer {
 	for _, ir := range resp.ImpactedResources {
 		if ir != nil && ir.Resource != nil {
 			impactedResources = append(impactedResources, ImpactedResource{
-				Resource: transformResourceIdentity(ir.Resource),
-				Depth:    ir.Depth,
+				Resource:     transformResourceIdentity(ir.Resource),
+				Depth:        ir.Depth,
+				ImpactType:   ir.ImpactType,
+				ImpactReason: ir.ImpactReason,
 			})
 		}
 	}
@@ -203,6 +231,27 @@ func transformProtoResponse(resp *corev1.AnalyzeImpactResponse) *ImpactAnswer {
 		}
 	}
 
+	var changeAssessment *ChangeAssessment
+	if resp.ChangeAssessment != nil {
+		var ct ChangeType
+		switch resp.ChangeAssessment.ChangeType {
+		case corev1.ChangeType_CHANGE_TYPE_DELETE:
+			ct = ChangeTypeDelete
+		case corev1.ChangeType_CHANGE_TYPE_UPDATE:
+			ct = ChangeTypeUpdate
+		case corev1.ChangeType_CHANGE_TYPE_SCALE:
+			ct = ChangeTypeScale
+		case corev1.ChangeType_CHANGE_TYPE_REPLACE:
+			ct = ChangeTypeReplace
+		}
+		changeAssessment = &ChangeAssessment{
+			ChangeType:   ct,
+			ImpactNature: resp.ChangeAssessment.ImpactNature,
+			Assumptions:  copyStringSlice(resp.ChangeAssessment.Assumptions),
+			Limitations:  copyStringSlice(resp.ChangeAssessment.Limitations),
+		}
+	}
+
 	return &ImpactAnswer{
 		Target:            target,
 		Summary:           summary,
@@ -211,6 +260,7 @@ func transformProtoResponse(resp *corev1.AnalyzeImpactResponse) *ImpactAnswer {
 		Paths:             paths,
 		Evidence:          evidence,
 		ExplanationFacts:  explanationFacts,
+		ChangeAssessment:  changeAssessment,
 	}
 }
 

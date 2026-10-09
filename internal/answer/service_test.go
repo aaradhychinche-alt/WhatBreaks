@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	corev1 "github.com/aaradhychinche-alt/WhatBreaks/gen/go/wb/core/v1"
@@ -389,5 +390,272 @@ func TestService_DeterministicResponse(t *testing.T) {
 
 	if string(b1) != string(b2) {
 		t.Fatalf("responses were non-deterministic:\nFirst:  %s\nSecond: %s", string(b1), string(b2))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test: change-aware request and response translation
+// ---------------------------------------------------------------------------
+func TestService_ChangeAwareTranslation(t *testing.T) {
+	mock := &mockCoreClient{
+		resp: &corev1.AnalyzeImpactResponse{
+			Target: &corev1.ResourceIdentity{
+				Provider:     "kubernetes",
+				ResourceType: "configmap",
+				ProviderId:   "backend-config",
+			},
+			Summary: &corev1.ImpactSummary{
+				ImpactedCount: 1,
+				DirectCount:   1,
+				IndirectCount: 0,
+				MaxDepth:      1,
+			},
+			ImpactedResources: []*corev1.ImpactedResource{
+				{
+					Resource:     &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "pod", ProviderId: "backend-pod"},
+					Depth:        1,
+					ImpactType:   "DIRECT",
+					ImpactReason: "Direct dependent via DEPENDS_ON: may require reload or restart to consume updated target state",
+				},
+			},
+			ChangeAssessment: &corev1.ChangeAssessment{
+				ChangeType:   corev1.ChangeType_CHANGE_TYPE_UPDATE,
+				ImpactNature: "POTENTIAL_IMPACT",
+				Assumptions:  []string{"Target update modifies configuration or schema"},
+				Limitations:  []string{"Multi-hop propagation beyond depth 1 is not modeled"},
+			},
+		},
+	}
+
+	svc := answer.NewService(mock, nil)
+	req := answer.ImpactRequest{
+		Target: &answer.ResourceIdentity{
+			Provider:     "kubernetes",
+			ResourceType: "configmap",
+			ProviderID:   "backend-config",
+		},
+		Direction: "incoming",
+		MaxDepth:  3,
+		ProposedChange: &answer.ProposedChange{
+			ChangeType: answer.ChangeTypeUpdate,
+			Details:    "updating DB connection string",
+		},
+	}
+
+	resp, err := svc.AnalyzeImpact(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify gRPC request had correct ProposedChange
+	if mock.lastReq.ProposedChange == nil {
+		t.Fatal("expected non-nil ProposedChange in core request")
+	}
+	if mock.lastReq.ProposedChange.ChangeType != corev1.ChangeType_CHANGE_TYPE_UPDATE {
+		t.Errorf("expected CHANGE_TYPE_UPDATE, got %v", mock.lastReq.ProposedChange.ChangeType)
+	}
+	if mock.lastReq.ProposedChange.Details != "updating DB connection string" {
+		t.Errorf("expected details 'updating DB connection string', got %q", mock.lastReq.ProposedChange.Details)
+	}
+
+	// Verify answer had correct ChangeAssessment
+	if resp.ChangeAssessment == nil {
+		t.Fatal("expected non-nil ChangeAssessment in response")
+	}
+	if resp.ChangeAssessment.ChangeType != answer.ChangeTypeUpdate {
+		t.Errorf("expected ChangeType UPDATE, got %q", resp.ChangeAssessment.ChangeType)
+	}
+	if resp.ChangeAssessment.ImpactNature != "POTENTIAL_IMPACT" {
+		t.Errorf("expected POTENTIAL_IMPACT, got %q", resp.ChangeAssessment.ImpactNature)
+	}
+	if len(resp.ChangeAssessment.Assumptions) == 0 {
+		t.Error("expected non-empty assumptions")
+	}
+	if len(resp.ChangeAssessment.Limitations) == 0 {
+		t.Error("expected non-empty limitations")
+	}
+
+	// Verify impacted resource fields
+	if len(resp.ImpactedResources) != 1 {
+		t.Fatalf("expected 1 impacted resource, got %d", len(resp.ImpactedResources))
+	}
+	ir := resp.ImpactedResources[0]
+	if ir.ImpactType != "DIRECT" {
+		t.Errorf("expected DIRECT impact_type, got %q", ir.ImpactType)
+	}
+	if ir.ImpactReason == "" {
+		t.Error("expected non-empty impact_reason")
+	}
+}
+
+func TestService_ChangeAware_ScaleZeroImpacts(t *testing.T) {
+	mock := &mockCoreClient{
+		resp: &corev1.AnalyzeImpactResponse{
+			Target: &corev1.ResourceIdentity{
+				Provider:     "kubernetes",
+				ResourceType: "service",
+				ProviderId:   "payments-api",
+			},
+			Summary: &corev1.ImpactSummary{
+				ImpactedCount: 0,
+			},
+			ChangeAssessment: &corev1.ChangeAssessment{
+				ChangeType:   corev1.ChangeType_CHANGE_TYPE_SCALE,
+				ImpactNature: "POTENTIAL_IMPACT",
+				Assumptions:  []string{"Target scale event alters runtime throughput"},
+				Limitations: []string{
+					"Target resource has declarative dependencies (e.g. DEPENDS_ON), but no runtime CALLS relationships were observed. Under the v1 SCALE policy, declarative dependencies are excluded from scaling impact; zero identified impacts reflects an absence of qualifying runtime caller evidence in the current model, not confirmed absence of operational scaling consequences.",
+				},
+			},
+		},
+	}
+
+	svc := answer.NewService(mock, nil)
+	req := answer.ImpactRequest{
+		Target: &answer.ResourceIdentity{
+			Provider:     "kubernetes",
+			ResourceType: "service",
+			ProviderID:   "payments-api",
+		},
+		Direction: "incoming",
+		MaxDepth:  3,
+		ProposedChange: &answer.ProposedChange{
+			ChangeType: answer.ChangeTypeScale,
+			Details:    "scaling to 0 replicas",
+		},
+	}
+
+	resp, err := svc.AnalyzeImpact(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.Summary.ImpactedCount != 0 {
+		t.Errorf("expected 0 impacted count, got %d", resp.Summary.ImpactedCount)
+	}
+	if resp.ChangeAssessment == nil {
+		t.Fatal("expected non-nil ChangeAssessment")
+	}
+	if resp.ChangeAssessment.ChangeType != answer.ChangeTypeScale {
+		t.Errorf("expected SCALE, got %s", resp.ChangeAssessment.ChangeType)
+	}
+	if len(resp.ChangeAssessment.Limitations) == 0 || !strings.Contains(resp.ChangeAssessment.Limitations[0], "declarative dependencies (e.g. DEPENDS_ON)") {
+		t.Errorf("expected limitation explaining DEPENDS_ON exclusion, got: %+v", resp.ChangeAssessment.Limitations)
+	}
+}
+
+func TestService_ChangeAware_ReplaceTranslation(t *testing.T) {
+	mock := &mockCoreClient{
+		resp: &corev1.AnalyzeImpactResponse{
+			Target: &corev1.ResourceIdentity{
+				Provider:     "kubernetes",
+				ResourceType: "service",
+				ProviderId:   "payments-api",
+			},
+			Summary: &corev1.ImpactSummary{
+				ImpactedCount: 1,
+				DirectCount:   1,
+				MaxDepth:      1,
+			},
+			ImpactedResources: []*corev1.ImpactedResource{
+				{
+					Resource:     &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "checkout-service"},
+					Depth:        1,
+					ImpactType:   "DIRECT",
+					ImpactReason: "Direct connection via DEPENDS_ON: subject to transient rollover or reconnection during replacement",
+				},
+			},
+			ChangeAssessment: &corev1.ChangeAssessment{
+				ChangeType:   corev1.ChangeType_CHANGE_TYPE_REPLACE,
+				ImpactNature: "POTENTIAL_IMPACT",
+				Assumptions:  []string{"Target replacement implies temporary disruption"},
+				Limitations:  []string{"Impact is limited to direct connections during the replacement transition window"},
+			},
+		},
+	}
+
+	svc := answer.NewService(mock, nil)
+	req := answer.ImpactRequest{
+		Target: &answer.ResourceIdentity{
+			Provider:     "kubernetes",
+			ResourceType: "service",
+			ProviderID:   "payments-api",
+		},
+		Direction: "incoming",
+		MaxDepth:  5,
+		ProposedChange: &answer.ProposedChange{
+			ChangeType: answer.ChangeTypeReplace,
+			Details:    "rolling replacement of payments-api",
+		},
+	}
+
+	resp, err := svc.AnalyzeImpact(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mock.lastReq.ProposedChange == nil || mock.lastReq.ProposedChange.ChangeType != corev1.ChangeType_CHANGE_TYPE_REPLACE {
+		t.Errorf("expected CHANGE_TYPE_REPLACE in gRPC request, got %+v", mock.lastReq.ProposedChange)
+	}
+	if resp.ChangeAssessment == nil || resp.ChangeAssessment.ChangeType != answer.ChangeTypeReplace {
+		t.Errorf("expected REPLACE in ChangeAssessment, got %+v", resp.ChangeAssessment)
+	}
+	if len(resp.ImpactedResources) != 1 || resp.ImpactedResources[0].ImpactType != "DIRECT" {
+		t.Errorf("expected DIRECT impacted resource, got %+v", resp.ImpactedResources)
+	}
+}
+
+func TestService_LegacyRequest_PreservesNilAssessmentAndEmptyFields(t *testing.T) {
+	mock := &mockCoreClient{
+		resp: &corev1.AnalyzeImpactResponse{
+			Target: &corev1.ResourceIdentity{
+				Provider:     "kubernetes",
+				ResourceType: "service",
+				ProviderId:   "payments-api",
+			},
+			Summary: &corev1.ImpactSummary{
+				ImpactedCount: 1,
+				DirectCount:   1,
+				MaxDepth:      1,
+			},
+			ImpactedResources: []*corev1.ImpactedResource{
+				{
+					Resource: &corev1.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderId: "checkout-service"},
+					Depth:    1,
+				},
+			},
+		},
+	}
+
+	svc := answer.NewService(mock, nil)
+	req := answer.ImpactRequest{
+		Target: &answer.ResourceIdentity{
+			Provider:     "kubernetes",
+			ResourceType: "service",
+			ProviderID:   "payments-api",
+		},
+		Direction: "incoming",
+		MaxDepth:  3,
+	}
+
+	resp, err := svc.AnalyzeImpact(context.Background(), req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if mock.lastReq.ProposedChange != nil {
+		t.Errorf("expected nil ProposedChange in gRPC request for legacy query, got %+v", mock.lastReq.ProposedChange)
+	}
+	if resp.ChangeAssessment != nil {
+		t.Errorf("expected nil ChangeAssessment in response for legacy query, got %+v", resp.ChangeAssessment)
+	}
+	if len(resp.ImpactedResources) != 1 {
+		t.Fatalf("expected 1 impacted resource, got %d", len(resp.ImpactedResources))
+	}
+	if resp.ImpactedResources[0].ImpactType != "" {
+		t.Errorf("expected empty ImpactType for legacy query, got %q", resp.ImpactedResources[0].ImpactType)
+	}
+	if resp.ImpactedResources[0].ImpactReason != "" {
+		t.Errorf("expected empty ImpactReason for legacy query, got %q", resp.ImpactedResources[0].ImpactReason)
 	}
 }

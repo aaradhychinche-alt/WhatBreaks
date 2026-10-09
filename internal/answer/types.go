@@ -21,6 +21,30 @@ type Relationship struct {
 	Category string           `json:"category"`
 }
 
+// ChangeType identifies the nature of a proposed change.
+type ChangeType string
+
+const (
+	ChangeTypeDelete  ChangeType = "DELETE"
+	ChangeTypeUpdate  ChangeType = "UPDATE"
+	ChangeTypeScale   ChangeType = "SCALE"
+	ChangeTypeReplace ChangeType = "REPLACE"
+)
+
+// ProposedChange defines the change intent specified by the caller.
+type ProposedChange struct {
+	ChangeType ChangeType `json:"change_type"`
+	Details    string     `json:"details,omitempty"`
+}
+
+// ChangeAssessment provides the deterministic assessment of the proposed change.
+type ChangeAssessment struct {
+	ChangeType   ChangeType `json:"change_type"`
+	ImpactNature string     `json:"impact_nature"`
+	Assumptions  []string   `json:"assumptions"`
+	Limitations  []string   `json:"limitations"`
+}
+
 // ImpactSummary provides deterministic aggregate facts summarizing the candidate blast radius.
 type ImpactSummary struct {
 	ImpactedCount uint32 `json:"impacted_count"`
@@ -31,8 +55,10 @@ type ImpactSummary struct {
 
 // ImpactedResource pairs an impacted resource identity with its shortest hop distance.
 type ImpactedResource struct {
-	Resource ResourceIdentity `json:"resource"`
-	Depth    uint32           `json:"depth"`
+	Resource     ResourceIdentity `json:"resource"`
+	Depth        uint32           `json:"depth"`
+	ImpactType   string           `json:"impact_type,omitempty"`
+	ImpactReason string           `json:"impact_reason,omitempty"`
 }
 
 // AnswerRelationship represents an infrastructure relationship with its derived operational state and supporting evidence IDs.
@@ -72,12 +98,14 @@ type ImpactAnswer struct {
 	Paths             []ImpactPath         `json:"paths"`
 	Evidence          []AnswerEvidence     `json:"evidence"`
 	ExplanationFacts  []ExplanationFact    `json:"explanation_facts"`
+	ChangeAssessment  *ChangeAssessment    `json:"change_assessment,omitempty"`
 }
 
 // ImpactRequest defines the incoming payload for impact analysis.
 type ImpactRequest struct {
-	Target      *ResourceIdentity `json:"target"`
-	Direction   string            `json:"direction"`
-	MaxDepth    uint32            `json:"max_depth"`
-	WorkspaceID string            `json:"workspace_id,omitempty"`
+	Target         *ResourceIdentity `json:"target"`
+	Direction      string            `json:"direction"`
+	MaxDepth       uint32            `json:"max_depth"`
+	WorkspaceID    string            `json:"workspace_id,omitempty"`
+	ProposedChange *ProposedChange   `json:"proposed_change,omitempty"`
 }

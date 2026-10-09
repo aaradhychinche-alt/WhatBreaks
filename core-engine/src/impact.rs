@@ -102,6 +102,299 @@ pub fn propagates_impact(kind: &RelationshipKind) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Change Intent & Assessment Types
+// ---------------------------------------------------------------------------
+
+/// Strongly validated change types supported for change-aware impact analysis in v1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ChangeType {
+    /// Target resource is being deleted or permanently decommissioned.
+    Delete,
+    /// Target resource is undergoing configuration or attribute modification.
+    Update,
+    /// Target resource is undergoing capacity, replica count, or throughput adjustment.
+    Scale,
+    /// Target resource is being destroyed and recreated / replaced.
+    Replace,
+}
+
+impl ChangeType {
+    /// Return the canonical string representation of the change type.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Delete => "DELETE",
+            Self::Update => "UPDATE",
+            Self::Scale => "SCALE",
+            Self::Replace => "REPLACE",
+        }
+    }
+
+    /// Parse a change type string strictly, rejecting unsupported or unknown values.
+    pub fn from_str_strict(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_uppercase().as_str() {
+            "DELETE" => Some(Self::Delete),
+            "UPDATE" => Some(Self::Update),
+            "SCALE" => Some(Self::Scale),
+            "REPLACE" => Some(Self::Replace),
+            _ => None,
+        }
+    }
+}
+
+/// Proposed change intent specified by the caller.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposedChange {
+    /// The specific change type.
+    pub change_type: ChangeType,
+    /// Optional change details or metadata.
+    pub details: Option<String>,
+}
+
+impl ProposedChange {
+    /// Create a new `ProposedChange` for the given change type.
+    pub fn new(change_type: ChangeType) -> Self {
+        Self {
+            change_type,
+            details: None,
+        }
+    }
+
+    /// Create a new `ProposedChange` with specific details.
+    pub fn with_details(change_type: ChangeType, details: impl Into<String>) -> Self {
+        Self {
+            change_type,
+            details: Some(details.into()),
+        }
+    }
+
+    /// Evaluates whether this change type propagates across a given relationship kind.
+    ///
+    /// Propagation Policy (v1):
+    /// - DELETE: propagates across DEPENDS_ON, CALLS, READS_FROM, WRITES_TO.
+    /// - UPDATE: propagates across DEPENDS_ON, CALLS, READS_FROM, WRITES_TO (up to max depth 1).
+    /// - SCALE: propagates ONLY across CALLS (runtime network/invocation traffic). Suppresses declarative DEPENDS_ON.
+    /// - REPLACE: propagates across DEPENDS_ON, CALLS, READS_FROM, WRITES_TO (up to max depth 1).
+    ///
+    /// Non-propagating boundary kinds (OWNS, RUNS_ON, AUTHORIZES) are NEVER traversed for any change.
+    pub fn propagates(&self, kind: &RelationshipKind) -> bool {
+        match self.change_type {
+            ChangeType::Delete => propagates_impact(kind),
+            ChangeType::Update => propagates_impact(kind),
+            ChangeType::Scale => matches!(kind.as_str(), "CALLS"),
+            ChangeType::Replace => propagates_impact(kind),
+        }
+    }
+
+    /// Returns the effective maximum traversal depth under this change policy.
+    ///
+    /// Traversal Depth Policy (v1):
+    /// - DELETE: Full requested depth (multi-hop transitive blast radius).
+    /// - UPDATE: Restricted to depth 1 (direct dependents only; indirect propagation suppressed without key-level semantic diffs).
+    /// - SCALE: Restricted to depth 1 (direct callers only).
+    /// - REPLACE: Restricted to depth 1 (transient rollover window affecting direct connections only).
+    pub fn effective_max_depth(&self, requested_depth: usize) -> usize {
+        match self.change_type {
+            ChangeType::Delete => requested_depth,
+            ChangeType::Update => requested_depth.min(1),
+            ChangeType::Scale => requested_depth.min(1),
+            ChangeType::Replace => requested_depth.min(1),
+        }
+    }
+
+    /// Factual explanation of why a resource is impacted at a specific depth and relationship kind.
+    pub fn impact_reason(&self, kind: Option<&str>, depth: usize) -> String {
+        let kind_str = kind.unwrap_or("relationship");
+        match (self.change_type, depth) {
+            (ChangeType::Delete, 1) => {
+                format!(
+                    "Direct dependent via {}: target resource is proposed for deletion",
+                    kind_str
+                )
+            }
+            (ChangeType::Delete, d) => {
+                format!(
+                    "Indirect dependent at depth {}: transitively affected by target deletion",
+                    d
+                )
+            }
+            (ChangeType::Update, 1) => {
+                format!(
+                    "Direct dependent via {}: may require reload or restart to consume updated target state",
+                    kind_str
+                )
+            }
+            (ChangeType::Update, d) => {
+                format!(
+                    "Indirect dependent at depth {}: potential transitive update impact",
+                    d
+                )
+            }
+            (ChangeType::Scale, 1) => {
+                format!(
+                    "Direct runtime caller via {}: subject to traffic capacity, latency, or concurrency changes",
+                    kind_str
+                )
+            }
+            (ChangeType::Scale, d) => {
+                format!(
+                    "Indirect runtime caller at depth {}: potential downstream concurrency impact",
+                    d
+                )
+            }
+            (ChangeType::Replace, 1) => {
+                format!(
+                    "Direct connection via {}: subject to transient rollover or reconnection during replacement",
+                    kind_str
+                )
+            }
+            (ChangeType::Replace, d) => {
+                format!(
+                    "Indirect connection at depth {}: potential transitive rollover impact",
+                    d
+                )
+            }
+        }
+    }
+
+    /// Return a depth-based impact reason when relationship kind is not yet resolved.
+    pub fn impact_reason_for_depth(&self, depth: usize) -> String {
+        self.impact_reason(None, depth)
+    }
+
+    /// High-level assessment of the nature of the impact.
+    pub fn impact_nature(&self) -> &'static str {
+        "POTENTIAL_IMPACT"
+    }
+
+    /// Assumptions underlying this change assessment in v1.
+    pub fn assumptions(&self) -> Vec<String> {
+        match self.change_type {
+            ChangeType::Delete => vec![
+                "Target resource removal disrupts dependents relying on its declared presence or runtime availability.".to_string(),
+                "Cascading transitive failures assume no graceful degradation or fallback in upstream dependents unless verified.".to_string(),
+            ],
+            ChangeType::Update => vec![
+                "Target update modifies configuration or schema; direct consumers may require reconciliation or restart.".to_string(),
+                "Transitive multi-hop propagation is suppressed in v1 due to absence of field-level change diffs.".to_string(),
+            ],
+            ChangeType::Scale => vec![
+                "Target scale event alters runtime throughput and concurrency without altering resource interface contracts.".to_string(),
+                "Only direct runtime CALLS edges are affected; static configuration dependencies remain intact.".to_string(),
+            ],
+            ChangeType::Replace => vec![
+                "Target replacement implies temporary disruption during teardown and recreation of the resource instance.".to_string(),
+                "Interface identity is preserved post-rollover; long-term multi-hop cascade is not assumed.".to_string(),
+            ],
+        }
+    }
+
+    /// Known limitations for this change assessment in v1.
+    pub fn limitations(&self) -> Vec<String> {
+        match self.change_type {
+            ChangeType::Delete => vec![
+                "Does not evaluate client retry policies, circuit breakers, or redundant failover replicas.".to_string(),
+                "Assumes binary availability; does not model partial or graceful degradation.".to_string(),
+            ],
+            ChangeType::Update => vec![
+                "Does not perform schema or key-level diffing of the updated resource content.".to_string(),
+                "Multi-hop propagation beyond depth 1 is not modeled in v1 without semantic change payloads.".to_string(),
+            ],
+            ChangeType::Scale => vec![
+                "Does not evaluate pod replica counts, autoscale thresholds, or specific load profiles.".to_string(),
+                "Static/declarative dependencies (DEPENDS_ON) are excluded; only runtime invocation edges (CALLS) are evaluated.".to_string(),
+            ],
+            ChangeType::Replace => vec![
+                "Does not verify rolling update parameters (maxSurge/maxUnavailable) or zero-downtime mechanisms.".to_string(),
+                "Impact is limited to direct connections during the replacement transition window.".to_string(),
+            ],
+        }
+    }
+}
+
+/// Deterministic assessment of a proposed change's nature, assumptions, and limitations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeAssessment {
+    /// The change type that was evaluated.
+    pub change_type: ChangeType,
+    /// High-level assessment nature (e.g. "POTENTIAL_IMPACT").
+    pub impact_nature: String,
+    /// Explicit assumptions underlying the assessment.
+    pub assumptions: Vec<String>,
+    /// Known limitations of the v1 analysis for this change.
+    pub limitations: Vec<String>,
+}
+
+impl ChangeAssessment {
+    /// Create a `ChangeAssessment` from a `ProposedChange`.
+    pub fn from_proposed_change(change: &ProposedChange) -> Self {
+        Self {
+            change_type: change.change_type,
+            impact_nature: change.impact_nature().to_string(),
+            assumptions: change.assumptions(),
+            limitations: change.limitations(),
+        }
+    }
+
+    /// Create a `ChangeAssessment` tailored to the specific graph analysis context and outcome.
+    pub fn for_analysis(
+        change: &ProposedChange,
+        graph: &Graph,
+        target: &ResourceIdentity,
+        direction: TraversalDirection,
+        impacted_count: usize,
+    ) -> Self {
+        let mut assessment = Self::from_proposed_change(change);
+
+        if impacted_count == 0 {
+            if !graph.contains_resource(target) {
+                assessment.limitations.push(
+                    "Target resource is not observed in the graph; impact cannot be identified from current topology.".to_string(),
+                );
+            } else {
+                let adjacent_rels = match direction {
+                    TraversalDirection::Incoming => graph.get_relationships_to(target),
+                    TraversalDirection::Outgoing => graph.get_relationships_from(target),
+                };
+
+                match change.change_type {
+                    ChangeType::Scale => {
+                        let has_declarative = adjacent_rels.iter().any(|r| {
+                            matches!(r.kind.as_str(), "DEPENDS_ON" | "READS_FROM" | "WRITES_TO")
+                        });
+                        if has_declarative {
+                            assessment.limitations.push(
+                                "Target resource has declarative dependencies (e.g. DEPENDS_ON), but no runtime CALLS relationships were observed. Under the v1 SCALE policy, declarative dependencies are excluded from scaling impact; zero identified impacts reflects an absence of qualifying runtime caller evidence in the current model, not confirmed absence of operational scaling consequences.".to_string(),
+                            );
+                        } else {
+                            assessment.limitations.push(
+                                "No runtime caller (CALLS) relationships or evidence were observed for the target resource. Zero identified impacts reflects an absence of caller evidence in the current model, not confirmed absence of scaling consequences.".to_string(),
+                            );
+                        }
+                    }
+                    ChangeType::Delete => {
+                        assessment.limitations.push(
+                            "No qualifying incoming relationships (DEPENDS_ON, CALLS, READS_FROM, WRITES_TO) were observed for the target resource. Zero identified impacts reflects an absence of dependent relationships in the current graph model, not a guarantee that deletion will have no external impact.".to_string(),
+                        );
+                    }
+                    ChangeType::Update => {
+                        assessment.limitations.push(
+                            "No qualifying direct dependents (depth 1) were observed for the target resource. Zero identified impacts reflects an absence of direct dependency relationships in the current graph model, not a guarantee that configuration changes will have no operational effect.".to_string(),
+                        );
+                    }
+                    ChangeType::Replace => {
+                        assessment.limitations.push(
+                            "No qualifying direct connections (depth 1) were observed for the target resource. Zero identified impacts reflects an absence of direct connection relationships in the current graph model during the replacement transition window.".to_string(),
+                        );
+                    }
+                }
+            }
+        }
+
+        assessment
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ImpactRequest
 // ---------------------------------------------------------------------------
 
@@ -117,6 +410,8 @@ pub struct ImpactRequest {
     pub direction: TraversalDirection,
     /// Maximum relationship-hop depth for impact analysis.
     pub max_depth: usize,
+    /// Optional proposed change intent for change-aware analysis.
+    pub proposed_change: Option<ProposedChange>,
 }
 
 impl ImpactRequest {
@@ -126,6 +421,7 @@ impl ImpactRequest {
             target,
             direction,
             max_depth,
+            proposed_change: None,
         }
     }
 
@@ -137,6 +433,12 @@ impl ImpactRequest {
     /// Construct an outgoing impact request for `target` up to `max_depth`.
     pub fn outgoing(target: ResourceIdentity, max_depth: usize) -> Self {
         Self::new(target, TraversalDirection::Outgoing, max_depth)
+    }
+
+    /// Set a proposed change on this request.
+    pub fn with_proposed_change(mut self, change: ProposedChange) -> Self {
+        self.proposed_change = Some(change);
+        self
     }
 }
 
@@ -152,12 +454,36 @@ pub struct ImpactedResource {
     /// Minimum relationship-hop distance from the target along impact-propagating edges.
     /// Always >= 1. The target itself is never included in `impacted`.
     pub depth: usize,
+    /// Impact classification: "DIRECT" (depth = 1) or "INDIRECT" (depth > 1).
+    pub impact_type: Option<String>,
+    /// Factual explanation of why this resource is impacted under the proposed change.
+    pub impact_reason: Option<String>,
 }
 
 impl ImpactedResource {
     /// Construct a new `ImpactedResource`.
     pub fn new(resource: ResourceIdentity, depth: usize) -> Self {
-        Self { resource, depth }
+        Self {
+            resource,
+            depth,
+            impact_type: None,
+            impact_reason: None,
+        }
+    }
+
+    /// Construct a new `ImpactedResource` with impact type and reason.
+    pub fn with_details(
+        resource: ResourceIdentity,
+        depth: usize,
+        impact_type: impl Into<String>,
+        impact_reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            resource,
+            depth,
+            impact_type: Some(impact_type.into()),
+            impact_reason: Some(impact_reason.into()),
+        }
     }
 }
 
@@ -262,19 +588,48 @@ impl ImpactEngine {
     ///   canonical `(provider, resource_type, provider_id)`.
     /// - Does not mutate `graph`.
     pub fn analyze(graph: &Graph, request: &ImpactRequest) -> ImpactResult {
+        let effective_depth = if let Some(ref change) = request.proposed_change {
+            change.effective_max_depth(request.max_depth)
+        } else {
+            request.max_depth
+        };
+
         let traversal_result = Traversal::traverse_filtered(
             graph,
             &request.target,
             request.direction,
-            request.max_depth,
-            |rel| propagates_impact(&rel.kind),
+            effective_depth,
+            |rel| {
+                if let Some(ref change) = request.proposed_change {
+                    change.propagates(&rel.kind)
+                } else {
+                    propagates_impact(&rel.kind)
+                }
+            },
         );
 
         let impacted: Vec<ImpactedResource> = traversal_result
             .nodes
             .into_iter()
             .filter(|node| node.depth > 0)
-            .map(|node| ImpactedResource::new(node.resource, node.depth))
+            .map(|node| {
+                if let Some(ref change) = request.proposed_change {
+                    let impact_type = if node.depth == 1 {
+                        "DIRECT"
+                    } else {
+                        "INDIRECT"
+                    };
+                    let impact_reason = change.impact_reason_for_depth(node.depth);
+                    ImpactedResource::with_details(
+                        node.resource,
+                        node.depth,
+                        impact_type,
+                        impact_reason,
+                    )
+                } else {
+                    ImpactedResource::new(node.resource, node.depth)
+                }
+            })
             .collect();
 
         ImpactResult::new(request.target.clone(), impacted)
@@ -1043,5 +1398,277 @@ mod tests {
             ImpactedResource::new(make_identity("d"), 2)
         );
         assert!(!res.contains(&make_identity("c")));
+    }
+
+    // -----------------------------------------------------------------------
+    // Change-Aware Impact Analysis v1 Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_change_type_parsing() {
+        assert_eq!(
+            ChangeType::from_str_strict("delete"),
+            Some(ChangeType::Delete)
+        );
+        assert_eq!(
+            ChangeType::from_str_strict("UPDATE"),
+            Some(ChangeType::Update)
+        );
+        assert_eq!(
+            ChangeType::from_str_strict("Scale"),
+            Some(ChangeType::Scale)
+        );
+        assert_eq!(
+            ChangeType::from_str_strict("replace"),
+            Some(ChangeType::Replace)
+        );
+        assert_eq!(ChangeType::from_str_strict("INVALID"), None);
+        assert_eq!(ChangeType::from_str_strict(""), None);
+        assert_eq!(ChangeType::from_str_strict("   "), None);
+    }
+
+    #[test]
+    fn test_change_aware_delete_multihop() {
+        // A -> B -> C -> Target
+        let mut g = Graph::new();
+        g.add_relationship(make_rel("c", "target", RelationshipKind::DEPENDS_ON));
+        g.add_relationship(make_rel("b", "c", RelationshipKind::CALLS));
+        g.add_relationship(make_rel("a", "b", RelationshipKind::DEPENDS_ON));
+        g.add_relationship(make_rel("owner", "c", RelationshipKind::OWNS));
+
+        let req = ImpactRequest::incoming(make_identity("target"), 5)
+            .with_proposed_change(ProposedChange::new(ChangeType::Delete));
+        let res = ImpactEngine::analyze(&g, &req);
+
+        // Under DELETE, multi-hop propagation reaches c (depth 1), b (depth 2), a (depth 3)
+        assert_eq!(res.len(), 3);
+        assert_eq!(res.impacted[0].resource, make_identity("c"));
+        assert_eq!(res.impacted[0].depth, 1);
+        assert_eq!(res.impacted[0].impact_type.as_deref(), Some("DIRECT"));
+        assert_eq!(res.impacted[1].resource, make_identity("b"));
+        assert_eq!(res.impacted[1].depth, 2);
+        assert_eq!(res.impacted[1].impact_type.as_deref(), Some("INDIRECT"));
+        assert_eq!(res.impacted[2].resource, make_identity("a"));
+        assert_eq!(res.impacted[2].depth, 3);
+        assert_eq!(res.impacted[2].impact_type.as_deref(), Some("INDIRECT"));
+
+        // OWNS boundary must remain strictly non-propagating
+        assert!(!res.contains(&make_identity("owner")));
+    }
+
+    #[test]
+    fn test_change_aware_update_depth_one_limit() {
+        // A -> B -> Target
+        let mut g = Graph::new();
+        g.add_relationship(make_rel("b", "target", RelationshipKind::DEPENDS_ON));
+        g.add_relationship(make_rel("a", "b", RelationshipKind::DEPENDS_ON));
+
+        let req = ImpactRequest::incoming(make_identity("target"), 5)
+            .with_proposed_change(ProposedChange::new(ChangeType::Update));
+        let res = ImpactEngine::analyze(&g, &req);
+
+        // Under UPDATE, propagation is strictly limited to depth 1 in v1
+        assert_eq!(res.len(), 1);
+        assert_eq!(res.impacted[0].resource, make_identity("b"));
+        assert_eq!(res.impacted[0].depth, 1);
+        assert_eq!(res.impacted[0].impact_type.as_deref(), Some("DIRECT"));
+        assert!(!res.contains(&make_identity("a")));
+    }
+
+    #[test]
+    fn test_change_aware_scale_calls_only() {
+        // caller --CALLS--> target
+        // dep --DEPENDS_ON--> target
+        // reader --READS_FROM--> target
+        // transitive_caller --CALLS--> caller
+        let mut g = Graph::new();
+        g.add_relationship(make_rel("caller", "target", RelationshipKind::CALLS));
+        g.add_relationship(make_rel("dep", "target", RelationshipKind::DEPENDS_ON));
+        g.add_relationship(make_rel("reader", "target", RelationshipKind::READS_FROM));
+        g.add_relationship(make_rel(
+            "transitive_caller",
+            "caller",
+            RelationshipKind::CALLS,
+        ));
+
+        let req = ImpactRequest::incoming(make_identity("target"), 5)
+            .with_proposed_change(ProposedChange::new(ChangeType::Scale));
+        let res = ImpactEngine::analyze(&g, &req);
+
+        // Under SCALE, only direct CALLS edges propagate (depth 1)
+        assert_eq!(res.len(), 1);
+        assert_eq!(res.impacted[0].resource, make_identity("caller"));
+        assert_eq!(res.impacted[0].depth, 1);
+        assert_eq!(res.impacted[0].impact_type.as_deref(), Some("DIRECT"));
+
+        // Declarative dependencies (DEPENDS_ON, READS_FROM) and multi-hop callers must NOT be included
+        assert!(!res.contains(&make_identity("dep")));
+        assert!(!res.contains(&make_identity("reader")));
+        assert!(!res.contains(&make_identity("transitive_caller")));
+    }
+
+    #[test]
+    fn test_change_aware_replace_depth_one_limit() {
+        // direct_dep --DEPENDS_ON--> target
+        // direct_caller --CALLS--> target
+        // indirect_dep --DEPENDS_ON--> direct_dep
+        let mut g = Graph::new();
+        g.add_relationship(make_rel(
+            "direct_dep",
+            "target",
+            RelationshipKind::DEPENDS_ON,
+        ));
+        g.add_relationship(make_rel("direct_caller", "target", RelationshipKind::CALLS));
+        g.add_relationship(make_rel(
+            "indirect_dep",
+            "direct_dep",
+            RelationshipKind::DEPENDS_ON,
+        ));
+
+        let req = ImpactRequest::incoming(make_identity("target"), 5)
+            .with_proposed_change(ProposedChange::new(ChangeType::Replace));
+        let res = ImpactEngine::analyze(&g, &req);
+
+        // Under REPLACE, only direct connections (depth 1) are included
+        assert_eq!(res.len(), 2);
+        assert!(res.contains(&make_identity("direct_dep")));
+        assert!(res.contains(&make_identity("direct_caller")));
+        assert!(!res.contains(&make_identity("indirect_dep")));
+        assert_eq!(res.impacted[0].depth, 1);
+        assert_eq!(res.impacted[1].depth, 1);
+    }
+
+    #[test]
+    fn test_change_aware_replace_multihop_and_owns_boundary() {
+        // hop3 --DEPENDS_ON--> hop2 --CALLS--> hop1 --DEPENDS_ON--> target
+        // owner --OWNS--> target
+        let mut g = Graph::new();
+        g.add_relationship(make_rel("hop1", "target", RelationshipKind::DEPENDS_ON));
+        g.add_relationship(make_rel("hop2", "hop1", RelationshipKind::CALLS));
+        g.add_relationship(make_rel("hop3", "hop2", RelationshipKind::DEPENDS_ON));
+        g.add_relationship(make_rel("owner", "target", RelationshipKind::OWNS));
+
+        let req = ImpactRequest::incoming(make_identity("target"), 5)
+            .with_proposed_change(ProposedChange::new(ChangeType::Replace));
+        let res = ImpactEngine::analyze(&g, &req);
+
+        // Only hop1 is included at depth 1; hop2 and hop3 are suppressed by depth 1 limit.
+        // owner is excluded by the non-propagating OWNS boundary.
+        assert_eq!(res.len(), 1);
+        assert_eq!(res.impacted[0].resource, make_identity("hop1"));
+        assert_eq!(res.impacted[0].depth, 1);
+        assert_eq!(res.impacted[0].impact_type.as_deref(), Some("DIRECT"));
+        assert!(!res.contains(&make_identity("hop2")));
+        assert!(!res.contains(&make_identity("hop3")));
+        assert!(!res.contains(&make_identity("owner")));
+    }
+
+    #[test]
+    fn test_change_assessment_scale_zero_impact_with_depends_on() {
+        let mut g = Graph::new();
+        g.add_relationship(make_rel("dep", "target", RelationshipKind::DEPENDS_ON));
+
+        let change = ProposedChange::new(ChangeType::Scale);
+        let assessment = ChangeAssessment::for_analysis(
+            &change,
+            &g,
+            &make_identity("target"),
+            TraversalDirection::Incoming,
+            0,
+        );
+
+        assert_eq!(assessment.change_type, ChangeType::Scale);
+        assert_eq!(assessment.impact_nature, "POTENTIAL_IMPACT");
+        // Must explain that target has declarative dependencies, but CALLS was not observed
+        let has_dep_explanation = assessment.limitations.iter().any(|l| {
+            l.contains("declarative dependencies (e.g. DEPENDS_ON)")
+                && l.contains("no runtime CALLS relationships were observed")
+        });
+        assert!(
+            has_dep_explanation,
+            "limitations: {:?}",
+            assessment.limitations
+        );
+    }
+
+    #[test]
+    fn test_change_assessment_scale_zero_impact_with_no_relationships() {
+        let mut g = Graph::new();
+        g.add_resource(make_identity("target"));
+
+        let change = ProposedChange::new(ChangeType::Scale);
+        let assessment = ChangeAssessment::for_analysis(
+            &change,
+            &g,
+            &make_identity("target"),
+            TraversalDirection::Incoming,
+            0,
+        );
+
+        assert_eq!(assessment.change_type, ChangeType::Scale);
+        let has_no_caller_explanation = assessment.limitations.iter().any(|l| {
+            l.contains("No runtime caller (CALLS) relationships or evidence were observed")
+        });
+        assert!(
+            has_no_caller_explanation,
+            "limitations: {:?}",
+            assessment.limitations
+        );
+    }
+
+    #[test]
+    fn test_change_assessment_scale_with_calls_has_standard_limitations() {
+        let mut g = Graph::new();
+        g.add_relationship(make_rel("caller", "target", RelationshipKind::CALLS));
+
+        let change = ProposedChange::new(ChangeType::Scale);
+        let assessment = ChangeAssessment::for_analysis(
+            &change,
+            &g,
+            &make_identity("target"),
+            TraversalDirection::Incoming,
+            1,
+        );
+
+        assert_eq!(assessment.change_type, ChangeType::Scale);
+        // When impacts > 0, does NOT claim zero identified impacts
+        let has_zero_claim = assessment
+            .limitations
+            .iter()
+            .any(|l| l.contains("zero identified impacts"));
+        assert!(
+            !has_zero_claim,
+            "should not claim zero impacts: {:?}",
+            assessment.limitations
+        );
+    }
+
+    #[test]
+    fn test_change_assessment_empty_impacts_for_all_change_types() {
+        let mut g = Graph::new();
+        g.add_resource(make_identity("target"));
+
+        for ct in [ChangeType::Delete, ChangeType::Update, ChangeType::Replace] {
+            let change = ProposedChange::new(ct);
+            let assessment = ChangeAssessment::for_analysis(
+                &change,
+                &g,
+                &make_identity("target"),
+                TraversalDirection::Incoming,
+                0,
+            );
+            assert_eq!(assessment.change_type, ct);
+            assert_eq!(assessment.impact_nature, "POTENTIAL_IMPACT");
+            assert!(!assessment.assumptions.is_empty());
+            assert!(
+                assessment
+                    .limitations
+                    .iter()
+                    .any(|l| l.contains("Zero identified impacts")),
+                "assessment for {:?} should explain zero impacts: {:?}",
+                ct,
+                assessment.limitations
+            );
+        }
     }
 }

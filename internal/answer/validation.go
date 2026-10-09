@@ -71,5 +71,30 @@ func ValidateImpactRequest(req *ImpactRequest) error {
 		}
 	}
 
+	if req.ProposedChange != nil {
+		raw := strings.TrimSpace(string(req.ProposedChange.ChangeType))
+		details := strings.TrimSpace(req.ProposedChange.Details)
+		if raw == "" && details == "" {
+			// An empty request field preserves legacy impact-analysis behavior
+			req.ProposedChange = nil
+		} else if raw == "" {
+			return &ValidationError{
+				Field:   "proposed_change.change_type",
+				Message: "change_type is required when proposed_change is provided",
+			}
+		} else {
+			ct := strings.ToUpper(raw)
+			switch ChangeType(ct) {
+			case ChangeTypeDelete, ChangeTypeUpdate, ChangeTypeScale, ChangeTypeReplace:
+				req.ProposedChange.ChangeType = ChangeType(ct)
+			default:
+				return &ValidationError{
+					Field:   "proposed_change.change_type",
+					Message: fmt.Sprintf("unsupported change_type %q: must be DELETE, UPDATE, SCALE, or REPLACE", req.ProposedChange.ChangeType),
+				}
+			}
+		}
+	}
+
 	return nil
 }

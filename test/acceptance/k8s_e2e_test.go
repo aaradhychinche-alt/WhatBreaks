@@ -1014,6 +1014,160 @@ func TestKubernetes_RealEndToEndFlow(t *testing.T) {
 		t.Logf("Verified ImpactEngine v1 boundary: OWNS is a hard containment boundary and does not propagate impact")
 	}
 
+	// F. Change-Aware Impact Analysis on Observed ConfigMap and Node
+	// 1. Proposed UPDATE on ConfigMap backend-config:
+	// Should produce potential impact on backend Pod (depth 1, DIRECT).
+	ansCMUpdate, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: workspaceID,
+		Target:      impactTargetCM,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		ProposedChange: &answer.ProposedChange{
+			ChangeType: answer.ChangeTypeUpdate,
+			Details:    "updating database connection parameters",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact UPDATE on ConfigMap failed: %v", err)
+	}
+	if ansCMUpdate.ChangeAssessment == nil {
+		t.Fatalf("expected ChangeAssessment for ConfigMap UPDATE, got nil")
+	}
+	if ansCMUpdate.ChangeAssessment.ChangeType != answer.ChangeTypeUpdate {
+		t.Errorf("expected ChangeType UPDATE, got %s", ansCMUpdate.ChangeAssessment.ChangeType)
+	}
+	if ansCMUpdate.ChangeAssessment.ImpactNature != "POTENTIAL_IMPACT" {
+		t.Errorf("expected POTENTIAL_IMPACT, got %s", ansCMUpdate.ChangeAssessment.ImpactNature)
+	}
+	if ansCMUpdate.Summary.ImpactedCount == 0 {
+		t.Fatalf("expected non-zero impact for ConfigMap UPDATE on dependent Pod, got 0")
+	}
+	for _, ir := range ansCMUpdate.ImpactedResources {
+		if ir.Depth != 1 {
+			t.Errorf("UPDATE expected depth 1 only, got depth %d for %s", ir.Depth, ir.Resource.ProviderID)
+		}
+		if ir.ImpactType != "DIRECT" {
+			t.Errorf("expected DIRECT impact_type, got %s", ir.ImpactType)
+		}
+		if ir.ImpactReason == "" {
+			t.Errorf("expected non-empty impact_reason for %s", ir.Resource.ProviderID)
+		}
+	}
+	t.Logf("ConfigMap UPDATE Impact: target=%s, impacted_count=%d, impact_nature=%s",
+		ansCMUpdate.Target.ProviderID, ansCMUpdate.Summary.ImpactedCount, ansCMUpdate.ChangeAssessment.ImpactNature)
+
+	// 2. Proposed SCALE on ConfigMap backend-config:
+	// ConfigMap only has declarative DEPENDS_ON relations. SCALE only propagates across runtime CALLS edges.
+	// Therefore, SCALE on ConfigMap must produce 0 impacted resources.
+	ansCMScale, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: workspaceID,
+		Target:      impactTargetCM,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		ProposedChange: &answer.ProposedChange{
+			ChangeType: answer.ChangeTypeScale,
+			Details:    "scale change test on declarative config",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact SCALE on ConfigMap failed: %v", err)
+	}
+	if ansCMScale.Summary.ImpactedCount != 0 {
+		t.Errorf("SCALE on ConfigMap expected 0 impacted resources (declarative DEPENDS_ON suppressed), got %d",
+			ansCMScale.Summary.ImpactedCount)
+	}
+	if ansCMScale.ChangeAssessment == nil {
+		t.Fatalf("expected ChangeAssessment for ConfigMap SCALE, got nil")
+	}
+	if ansCMScale.ChangeAssessment.ChangeType != answer.ChangeTypeScale {
+		t.Errorf("expected ChangeType SCALE, got %s", ansCMScale.ChangeAssessment.ChangeType)
+	}
+	hasDepExplanation := false
+	for _, lim := range ansCMScale.ChangeAssessment.Limitations {
+		if strings.Contains(lim, "declarative dependencies (e.g. DEPENDS_ON)") && strings.Contains(lim, "no runtime CALLS relationships were observed") {
+			hasDepExplanation = true
+			break
+		}
+	}
+	if !hasDepExplanation {
+		t.Errorf("SCALE limitations must explain DEPENDS_ON exclusion, got: %+v", ansCMScale.ChangeAssessment.Limitations)
+	}
+	t.Logf("ConfigMap SCALE Impact: target=%s, impacted_count=0 (policy correctly suppressed declarative DEPENDS_ON)",
+		ansCMScale.Target.ProviderID)
+
+	// 2b. Proposed REPLACE on ConfigMap backend-config:
+	// REPLACE propagates across DEPENDS_ON up to depth 1.
+	ansCMReplace, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: workspaceID,
+		Target:      impactTargetCM,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		ProposedChange: &answer.ProposedChange{
+			ChangeType: answer.ChangeTypeReplace,
+			Details:    "recreating configmap instance",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact REPLACE on ConfigMap failed: %v", err)
+	}
+	if ansCMReplace.ChangeAssessment == nil {
+		t.Fatalf("expected ChangeAssessment for ConfigMap REPLACE, got nil")
+	}
+	if ansCMReplace.ChangeAssessment.ChangeType != answer.ChangeTypeReplace {
+		t.Errorf("expected ChangeType REPLACE, got %s", ansCMReplace.ChangeAssessment.ChangeType)
+	}
+	if ansCMReplace.Summary.ImpactedCount == 0 {
+		t.Fatalf("expected non-zero impact for ConfigMap REPLACE on dependent Pod, got 0")
+	}
+	for _, ir := range ansCMReplace.ImpactedResources {
+		if ir.Depth != 1 {
+			t.Errorf("REPLACE expected depth 1 only, got depth %d for %s", ir.Depth, ir.Resource.ProviderID)
+		}
+		if ir.ImpactType != "DIRECT" {
+			t.Errorf("expected DIRECT impact_type, got %s", ir.ImpactType)
+		}
+		if !strings.Contains(ir.ImpactReason, "transient rollover or reconnection") {
+			t.Errorf("expected rollover explanation, got %q", ir.ImpactReason)
+		}
+	}
+	t.Logf("ConfigMap REPLACE Impact: target=%s, impacted_count=%d",
+		ansCMReplace.Target.ProviderID, ansCMReplace.Summary.ImpactedCount)
+
+	// 3. Proposed DELETE on Node:
+	// Node has incoming DEPENDS_ON from observed Pods.
+	ansNodeDelete, err := answerSvc.AnalyzeImpact(ctx, answer.ImpactRequest{
+		WorkspaceID: workspaceID,
+		Target:      impactTargetNode,
+		Direction:   "incoming",
+		MaxDepth:    5,
+		ProposedChange: &answer.ProposedChange{
+			ChangeType: answer.ChangeTypeDelete,
+			Details:    "draining and deleting node from cluster",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeImpact DELETE on Node failed: %v", err)
+	}
+	if ansNodeDelete.ChangeAssessment == nil {
+		t.Fatalf("expected ChangeAssessment for Node DELETE, got nil")
+	}
+	if ansNodeDelete.ChangeAssessment.ChangeType != answer.ChangeTypeDelete {
+		t.Errorf("expected ChangeType DELETE, got %s", ansNodeDelete.ChangeAssessment.ChangeType)
+	}
+	if ansNodeDelete.Summary.ImpactedCount == 0 {
+		t.Fatalf("expected non-zero impact for Node DELETE, got 0")
+	}
+	for _, ir := range ansNodeDelete.ImpactedResources {
+		if ir.Depth == 1 && ir.ImpactType != "DIRECT" {
+			t.Errorf("expected DIRECT for depth 1, got %s", ir.ImpactType)
+		}
+		if ir.ImpactReason == "" {
+			t.Errorf("expected non-empty impact_reason for %s", ir.Resource.ProviderID)
+		}
+	}
+	t.Logf("Node DELETE Impact: target=%s, impacted_count=%d, impact_nature=%s",
+		ansNodeDelete.Target.ProviderID, ansNodeDelete.Summary.ImpactedCount, ansNodeDelete.ChangeAssessment.ImpactNature)
+
 	t.Logf("Real Kubernetes End-to-End flow verified successfully with DEPENDS_ON non-zero blast radius, control-plane ownership, and ZERO fake data.")
 }
 

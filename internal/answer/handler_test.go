@@ -14,11 +14,13 @@ import (
 )
 
 type mockService struct {
-	ans *answer.ImpactAnswer
-	err error
+	lastReq answer.ImpactRequest
+	ans     *answer.ImpactAnswer
+	err     error
 }
 
 func (m *mockService) AnalyzeImpact(ctx context.Context, req answer.ImpactRequest) (*answer.ImpactAnswer, error) {
+	m.lastReq = req
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -521,5 +523,276 @@ func TestHandler_SuccessfulStructuredResponse(t *testing.T) {
 	}
 	if len(res.ExplanationFacts) != 1 || len(res.ExplanationFacts[0].EvidenceIDs) != 1 {
 		t.Errorf("unexpected facts: %+v", res.ExplanationFacts)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test: HTTP handler with proposed change
+// ---------------------------------------------------------------------------
+func TestHandler_ValidProposedChange(t *testing.T) {
+	svc := &mockService{
+		ans: &answer.ImpactAnswer{
+			Target: answer.ResourceIdentity{
+				Provider:     "kubernetes",
+				ResourceType: "pod",
+				ProviderID:   "backend-pod",
+			},
+			Summary: answer.ImpactSummary{
+				ImpactedCount: 1,
+			},
+			ChangeAssessment: &answer.ChangeAssessment{
+				ChangeType:   answer.ChangeTypeDelete,
+				ImpactNature: "POTENTIAL_IMPACT",
+			},
+		},
+	}
+
+	h := answer.NewHandler(svc)
+	payload := []byte(`{
+		"target": {
+			"provider": "kubernetes",
+			"resource_type": "pod",
+			"provider_id": "backend-pod"
+		},
+		"direction": "incoming",
+		"max_depth": 3,
+		"proposed_change": {
+			"change_type": "DELETE",
+			"details": "deleting pod instance"
+		}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	if svc.lastReq.ProposedChange == nil {
+		t.Fatal("expected ProposedChange to be passed to Service")
+	}
+	if svc.lastReq.ProposedChange.ChangeType != answer.ChangeTypeDelete {
+		t.Errorf("expected DELETE, got %q", svc.lastReq.ProposedChange.ChangeType)
+	}
+	if svc.lastReq.ProposedChange.Details != "deleting pod instance" {
+		t.Errorf("expected details 'deleting pod instance', got %q", svc.lastReq.ProposedChange.Details)
+	}
+
+	var res answer.ImpactAnswer
+	if err := json.Unmarshal(rr.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if res.ChangeAssessment == nil || res.ChangeAssessment.ChangeType != answer.ChangeTypeDelete {
+		t.Errorf("expected ChangeAssessment DELETE, got %+v", res.ChangeAssessment)
+	}
+}
+
+func TestHandler_InvalidProposedChange_Returns400(t *testing.T) {
+	svc := &mockService{}
+	h := answer.NewHandler(svc)
+
+	payload := []byte(`{
+		"target": {
+			"provider": "kubernetes",
+			"resource_type": "pod",
+			"provider_id": "backend-pod"
+		},
+		"direction": "incoming",
+		"max_depth": 3,
+		"proposed_change": {
+			"change_type": "RESTART_CLUSTER"
+		}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(payload))
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var errResp answer.ErrorResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("failed to decode error response: %v", err)
+	}
+
+	if errResp.Code != string(answer.CodeValidationError) {
+		t.Errorf("expected code %s, got %s", answer.CodeValidationError, errResp.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Backward Compatibility Tests: omitted, null, and empty proposed_change
+// ---------------------------------------------------------------------------
+func TestHandler_BackwardCompatibility_OmittedProposedChange(t *testing.T) {
+	svc := &mockService{
+		ans: &answer.ImpactAnswer{
+			Target: answer.ResourceIdentity{
+				Provider:     "kubernetes",
+				ResourceType: "pod",
+				ProviderID:   "backend-pod",
+			},
+			Summary: answer.ImpactSummary{ImpactedCount: 1, DirectCount: 1},
+			ImpactedResources: []answer.ImpactedResource{
+				{
+					Resource: answer.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderID: "backend-svc"},
+					Depth:    1,
+				},
+			},
+		},
+	}
+	h := answer.NewHandler(svc)
+
+	// proposed_change omitted
+	payload := []byte(`{
+		"target": {
+			"provider": "kubernetes",
+			"resource_type": "pod",
+			"provider_id": "backend-pod"
+		},
+		"direction": "incoming",
+		"max_depth": 3
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(payload))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.lastReq.ProposedChange != nil {
+		t.Errorf("expected nil ProposedChange in service call, got %+v", svc.lastReq.ProposedChange)
+	}
+
+	bodyStr := rr.Body.String()
+	if bytes.Contains(rr.Body.Bytes(), []byte(`"change_assessment"`)) {
+		t.Errorf("legacy response must not contain change_assessment field: %s", bodyStr)
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte(`"impact_type"`)) {
+		t.Errorf("legacy response must not contain impact_type field: %s", bodyStr)
+	}
+}
+
+func TestHandler_BackwardCompatibility_NullProposedChange(t *testing.T) {
+	svc := &mockService{
+		ans: &answer.ImpactAnswer{
+			Target: answer.ResourceIdentity{
+				Provider:     "kubernetes",
+				ResourceType: "pod",
+				ProviderID:   "backend-pod",
+			},
+			Summary: answer.ImpactSummary{ImpactedCount: 1, DirectCount: 1},
+			ImpactedResources: []answer.ImpactedResource{
+				{
+					Resource: answer.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderID: "backend-svc"},
+					Depth:    1,
+				},
+			},
+		},
+	}
+	h := answer.NewHandler(svc)
+
+	// proposed_change: null
+	payload := []byte(`{
+		"target": {
+			"provider": "kubernetes",
+			"resource_type": "pod",
+			"provider_id": "backend-pod"
+		},
+		"direction": "incoming",
+		"max_depth": 3,
+		"proposed_change": null
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(payload))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.lastReq.ProposedChange != nil {
+		t.Errorf("expected nil ProposedChange in service call, got %+v", svc.lastReq.ProposedChange)
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte(`"change_assessment"`)) {
+		t.Errorf("legacy response must not contain change_assessment field")
+	}
+}
+
+func TestHandler_BackwardCompatibility_EmptyObjectProposedChange(t *testing.T) {
+	svc := &mockService{
+		ans: &answer.ImpactAnswer{
+			Target: answer.ResourceIdentity{
+				Provider:     "kubernetes",
+				ResourceType: "pod",
+				ProviderID:   "backend-pod",
+			},
+			Summary: answer.ImpactSummary{ImpactedCount: 1, DirectCount: 1},
+			ImpactedResources: []answer.ImpactedResource{
+				{
+					Resource: answer.ResourceIdentity{Provider: "kubernetes", ResourceType: "service", ProviderID: "backend-svc"},
+					Depth:    1,
+				},
+			},
+		},
+	}
+	h := answer.NewHandler(svc)
+
+	// proposed_change: {}
+	payload := []byte(`{
+		"target": {
+			"provider": "kubernetes",
+			"resource_type": "pod",
+			"provider_id": "backend-pod"
+		},
+		"direction": "incoming",
+		"max_depth": 3,
+		"proposed_change": {}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(payload))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if svc.lastReq.ProposedChange != nil {
+		t.Errorf("expected nil ProposedChange in service call for empty proposed_change object, got %+v", svc.lastReq.ProposedChange)
+	}
+	if bytes.Contains(rr.Body.Bytes(), []byte(`"change_assessment"`)) {
+		t.Errorf("legacy response must not contain change_assessment field")
+	}
+}
+
+func TestHandler_EmptyChangeTypeWithDetails_Returns400(t *testing.T) {
+	svc := &mockService{}
+	h := answer.NewHandler(svc)
+
+	payload := []byte(`{
+		"target": {
+			"provider": "kubernetes",
+			"resource_type": "pod",
+			"provider_id": "backend-pod"
+		},
+		"direction": "incoming",
+		"max_depth": 3,
+		"proposed_change": {
+			"details": "modifying memory limit without change_type"
+		}
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/impact", bytes.NewReader(payload))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d: %s", rr.Code, rr.Body.String())
 	}
 }

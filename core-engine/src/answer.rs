@@ -64,7 +64,10 @@ use chrono::{DateTime, Utc};
 use crate::evidence::{Evidence, EvidenceId, EvidenceSource, ObservationType};
 use crate::graph::Graph;
 use crate::history::{RelationshipState, RelationshipStateDerivation};
-use crate::impact::{propagates_impact, ImpactEngine, ImpactRequest, ImpactedResource};
+use crate::impact::{
+    propagates_impact, ChangeAssessment, ImpactEngine, ImpactRequest, ImpactedResource,
+    ProposedChange,
+};
 use crate::provenance::ProvenanceStore;
 use crate::relationship::Relationship;
 use crate::resource::ResourceIdentity;
@@ -148,6 +151,8 @@ pub struct AnswerRequest {
     pub direction: TraversalDirection,
     /// Maximum relationship-hop depth to explore.
     pub max_depth: usize,
+    /// Optional proposed change intent for change-aware analysis.
+    pub proposed_change: Option<ProposedChange>,
 }
 
 impl AnswerRequest {
@@ -157,6 +162,7 @@ impl AnswerRequest {
             target,
             direction,
             max_depth,
+            proposed_change: None,
         }
     }
 
@@ -168,6 +174,12 @@ impl AnswerRequest {
     /// Construct an outgoing impact request (downstream dependencies).
     pub fn outgoing(target: ResourceIdentity, max_depth: usize) -> Self {
         Self::new(target, TraversalDirection::Outgoing, max_depth)
+    }
+
+    /// Attach a proposed change to this request.
+    pub fn with_proposed_change(mut self, change: ProposedChange) -> Self {
+        self.proposed_change = Some(change);
+        self
     }
 }
 
@@ -405,10 +417,13 @@ pub struct ImpactAnswer {
     pub evidence: Vec<AnswerEvidence>,
     /// Structured explanation facts corresponding to each impact path.
     pub explanation_facts: Vec<ExplanationFact>,
+    /// Factual assessment of the proposed change (None for default blast radius).
+    pub change_assessment: Option<ChangeAssessment>,
 }
 
 impl ImpactAnswer {
     /// Construct a new `ImpactAnswer`.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         target: ResourceIdentity,
         summary: ImpactSummary,
@@ -417,6 +432,7 @@ impl ImpactAnswer {
         paths: Vec<ImpactPath>,
         evidence: Vec<AnswerEvidence>,
         explanation_facts: Vec<ExplanationFact>,
+        change_assessment: Option<ChangeAssessment>,
     ) -> Self {
         Self {
             target,
@@ -426,6 +442,7 @@ impl ImpactAnswer {
             paths,
             evidence,
             explanation_facts,
+            change_assessment,
         }
     }
 
@@ -496,6 +513,9 @@ impl AnswerEngine {
     ) -> ImpactAnswer {
         // 1. Guard against empty graph, unknown target, or zero max_depth
         if request.max_depth == 0 || !graph.contains_resource(&request.target) {
+            let change_assessment = request.proposed_change.as_ref().map(|pc| {
+                ChangeAssessment::for_analysis(pc, graph, &request.target, request.direction, 0)
+            });
             return ImpactAnswer::new(
                 request.target.clone(),
                 ImpactSummary::default(),
@@ -504,15 +524,20 @@ impl AnswerEngine {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                change_assessment,
             );
         }
 
         // 2. Delegate blast-radius calculation to ImpactEngine
-        let impact_req =
+        let mut impact_req =
             ImpactRequest::new(request.target.clone(), request.direction, request.max_depth);
+        impact_req.proposed_change = request.proposed_change.clone();
         let impact_result = ImpactEngine::analyze(graph, &impact_req);
 
         if impact_result.is_empty() {
+            let change_assessment = request.proposed_change.as_ref().map(|pc| {
+                ChangeAssessment::for_analysis(pc, graph, &request.target, request.direction, 0)
+            });
             return ImpactAnswer::new(
                 request.target.clone(),
                 ImpactSummary::default(),
@@ -521,6 +546,7 @@ impl AnswerEngine {
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
+                change_assessment,
             );
         }
 
@@ -620,20 +646,75 @@ impl AnswerEngine {
             ));
         }
 
+        // 8. Refine impacted resources with change-aware impact_type and impact_reason
+        let impacted_resources: Vec<ImpactedResource> = impact_result
+            .impacted
+            .into_iter()
+            .map(|mut ir| {
+                if let Some(ref change) = request.proposed_change {
+                    let rel_kind = paths.iter().find_map(|p| {
+                        if p.resources.contains(&ir.resource) {
+                            p.relationships.iter().find_map(|r| {
+                                if r.source == ir.resource || r.target == ir.resource {
+                                    Some(r.kind.as_str())
+                                } else {
+                                    None
+                                }
+                            })
+                        } else {
+                            None
+                        }
+                    });
+                    ir.impact_type = Some(if ir.depth == 1 {
+                        "DIRECT".to_string()
+                    } else {
+                        "INDIRECT".to_string()
+                    });
+                    ir.impact_reason = Some(change.impact_reason(rel_kind, ir.depth));
+                }
+                ir
+            })
+            .collect();
+
+        let change_assessment = request.proposed_change.as_ref().map(|pc| {
+            ChangeAssessment::for_analysis(
+                pc,
+                graph,
+                &request.target,
+                request.direction,
+                impacted_resources.len(),
+            )
+        });
+
         ImpactAnswer::new(
             request.target.clone(),
             summary,
-            impact_result.impacted,
+            impacted_resources,
             answer_relationships,
             paths,
             answer_evidence_list,
             explanation_facts,
+            change_assessment,
         )
     }
 
-    /// Reconstruct deterministic propagating paths up to `request.max_depth`.
+    /// Reconstruct deterministic propagating paths up to the effective max depth.
     fn reconstruct_paths(graph: &Graph, request: &AnswerRequest) -> Vec<ImpactPath> {
         let mut all_paths: Vec<ImpactPath> = Vec::new();
+
+        let effective_depth = if let Some(ref change) = request.proposed_change {
+            change.effective_max_depth(request.max_depth)
+        } else {
+            request.max_depth
+        };
+
+        let propagates = |kind: &crate::relationship::RelationshipKind| -> bool {
+            if let Some(ref change) = request.proposed_change {
+                change.propagates(kind)
+            } else {
+                propagates_impact(kind)
+            }
+        };
 
         match request.direction {
             TraversalDirection::Incoming => {
@@ -642,7 +723,7 @@ impl AnswerEngine {
                 // Hop 1: incoming relationships into target
                 let mut current_paths: Vec<ImpactPath> = Vec::new();
                 for rel in graph.get_relationships_to(&request.target) {
-                    if !propagates_impact(&rel.kind) {
+                    if !propagates(&rel.kind) {
                         continue;
                     }
                     if rel.source == request.target {
@@ -657,13 +738,13 @@ impl AnswerEngine {
 
                 all_paths.extend(current_paths.clone());
 
-                for _ in 1..request.max_depth {
+                for _ in 1..effective_depth {
                     let mut next_paths: Vec<ImpactPath> = Vec::new();
 
                     for p in current_paths {
                         let head = p.resources.first().expect("path has at least 1 resource");
                         for rel in graph.get_relationships_to(head) {
-                            if !propagates_impact(&rel.kind) {
+                            if !propagates(&rel.kind) {
                                 continue;
                             }
                             // Cycle/self-loop prevention: resource must not already exist in path
@@ -695,7 +776,7 @@ impl AnswerEngine {
                 // Hop 1: outgoing relationships from target
                 let mut current_paths: Vec<ImpactPath> = Vec::new();
                 for rel in graph.get_relationships_from(&request.target) {
-                    if !propagates_impact(&rel.kind) {
+                    if !propagates(&rel.kind) {
                         continue;
                     }
                     if rel.target == request.target {
@@ -710,13 +791,13 @@ impl AnswerEngine {
 
                 all_paths.extend(current_paths.clone());
 
-                for _ in 1..request.max_depth {
+                for _ in 1..effective_depth {
                     let mut next_paths: Vec<ImpactPath> = Vec::new();
 
                     for p in current_paths {
                         let tail = p.resources.last().expect("path has at least 1 resource");
                         for rel in graph.get_relationships_from(tail) {
-                            if !propagates_impact(&rel.kind) {
+                            if !propagates(&rel.kind) {
                                 continue;
                             }
                             // Cycle/self-loop prevention: resource must not already exist in path
@@ -1796,5 +1877,189 @@ mod tests {
         assert_eq!(ans.impacted_resources[0].resource, dep);
         assert!(!ans.contains(&target));
         assert_eq!(ans.depth_of(&target), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // 31. Change-Aware: SCALE Zero Impact with Only DEPENDS_ON Relationships
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_31_scale_zero_impact_with_depends_on() {
+        let mut g = Graph::new();
+        let mut prov = ProvenanceStore::new();
+
+        let target = make_identity("target");
+        let dep = make_identity("dep");
+
+        let rel = Relationship::new(dep.clone(), target.clone(), RelationshipKind::DEPENDS_ON);
+        g.add_relationship(rel.clone());
+        prov.add_relationship(rel.clone());
+
+        let req = AnswerRequest::incoming(target.clone(), 3)
+            .with_proposed_change(ProposedChange::new(crate::impact::ChangeType::Scale));
+        let ans = AnswerEngine::analyze(&g, &prov, &[], &req);
+
+        assert_eq!(ans.summary.impacted_count, 0);
+        assert!(ans.impacted_resources.is_empty());
+        let assessment = ans.change_assessment.expect("assessment must be present");
+        assert_eq!(assessment.change_type, crate::impact::ChangeType::Scale);
+        assert_eq!(assessment.impact_nature, "POTENTIAL_IMPACT");
+        let has_dep_explanation = assessment.limitations.iter().any(|l| {
+            l.contains("declarative dependencies (e.g. DEPENDS_ON)")
+                && l.contains("no runtime CALLS relationships were observed")
+        });
+        assert!(
+            has_dep_explanation,
+            "limitations must explain DEPENDS_ON exclusion: {:?}",
+            assessment.limitations
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 32. Change-Aware: SCALE Zero Impact with No Relationships
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_32_scale_zero_impact_with_no_relationships() {
+        let mut g = Graph::new();
+        let prov = ProvenanceStore::new();
+
+        let target = make_identity("target");
+        g.add_resource(target.clone());
+
+        let req = AnswerRequest::incoming(target.clone(), 3)
+            .with_proposed_change(ProposedChange::new(crate::impact::ChangeType::Scale));
+        let ans = AnswerEngine::analyze(&g, &prov, &[], &req);
+
+        assert_eq!(ans.summary.impacted_count, 0);
+        let assessment = ans.change_assessment.expect("assessment must be present");
+        let has_no_caller_explanation = assessment.limitations.iter().any(|l| {
+            l.contains("No runtime caller (CALLS) relationships or evidence were observed")
+        });
+        assert!(
+            has_no_caller_explanation,
+            "limitations must explain lack of caller evidence: {:?}",
+            assessment.limitations
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 33. Change-Aware: SCALE with Genuine Qualifying CALLS Evidence
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_33_scale_with_qualifying_calls() {
+        let mut g = Graph::new();
+        let mut prov = ProvenanceStore::new();
+
+        let target = make_identity("target");
+        let caller = make_identity("caller");
+
+        let rel = Relationship::new(caller.clone(), target.clone(), RelationshipKind::CALLS);
+        g.add_relationship(rel.clone());
+        prov.add_relationship(rel.clone());
+
+        let req = AnswerRequest::incoming(target.clone(), 3)
+            .with_proposed_change(ProposedChange::new(crate::impact::ChangeType::Scale));
+        let ans = AnswerEngine::analyze(&g, &prov, &[], &req);
+
+        assert_eq!(ans.summary.impacted_count, 1);
+        assert_eq!(ans.impacted_resources[0].resource, caller);
+        assert_eq!(ans.impacted_resources[0].depth, 1);
+        assert_eq!(
+            ans.impacted_resources[0].impact_type.as_deref(),
+            Some("DIRECT")
+        );
+        let reason = ans.impacted_resources[0]
+            .impact_reason
+            .as_deref()
+            .unwrap_or_default();
+        assert!(
+            reason.contains("CALLS")
+                && reason.contains("traffic capacity, latency, or concurrency")
+        );
+        let assessment = ans.change_assessment.expect("assessment must be present");
+        let has_zero_claim = assessment
+            .limitations
+            .iter()
+            .any(|l| l.contains("zero identified impacts"));
+        assert!(
+            !has_zero_claim,
+            "must not claim zero impacts when impacts exist: {:?}",
+            assessment.limitations
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 34. Change-Aware: REPLACE Depth-1 Limit and OWNS Boundary
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_34_replace_depth_one_limit_and_owns_boundary() {
+        let mut g = Graph::new();
+        let mut prov = ProvenanceStore::new();
+
+        let target = make_identity("target");
+        let hop1 = make_identity("hop1");
+        let hop2 = make_identity("hop2");
+        let owner = make_identity("owner");
+
+        let r1 = Relationship::new(hop1.clone(), target.clone(), RelationshipKind::DEPENDS_ON);
+        let r2 = Relationship::new(hop2.clone(), hop1.clone(), RelationshipKind::CALLS);
+        let r3 = Relationship::new(owner.clone(), target.clone(), RelationshipKind::OWNS);
+
+        g.add_relationship(r1.clone());
+        g.add_relationship(r2.clone());
+        g.add_relationship(r3.clone());
+        prov.add_relationship(r1.clone());
+        prov.add_relationship(r2.clone());
+        prov.add_relationship(r3.clone());
+
+        let req = AnswerRequest::incoming(target.clone(), 5)
+            .with_proposed_change(ProposedChange::new(crate::impact::ChangeType::Replace));
+        let ans = AnswerEngine::analyze(&g, &prov, &[], &req);
+
+        // Only hop1 (depth 1) is included; hop2 (depth 2) suppressed; owner (OWNS) suppressed
+        assert_eq!(ans.summary.impacted_count, 1);
+        assert_eq!(ans.impacted_resources[0].resource, hop1);
+        assert_eq!(ans.impacted_resources[0].depth, 1);
+        assert_eq!(
+            ans.impacted_resources[0].impact_type.as_deref(),
+            Some("DIRECT")
+        );
+        let reason = ans.impacted_resources[0]
+            .impact_reason
+            .as_deref()
+            .unwrap_or_default();
+        assert!(reason.contains("transient rollover or reconnection"));
+        assert!(!ans.contains(&hop2));
+        assert!(!ans.contains(&owner));
+
+        let assessment = ans.change_assessment.expect("assessment must be present");
+        assert_eq!(assessment.change_type, crate::impact::ChangeType::Replace);
+        assert_eq!(assessment.impact_nature, "POTENTIAL_IMPACT");
+    }
+
+    // -----------------------------------------------------------------------
+    // 35. Backward Compatibility: Legacy Request without Proposed Change
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_35_legacy_request_without_proposed_change() {
+        let mut g = Graph::new();
+        let mut prov = ProvenanceStore::new();
+
+        let target = make_identity("target");
+        let dep = make_identity("dep");
+
+        let rel = Relationship::new(dep.clone(), target.clone(), RelationshipKind::DEPENDS_ON);
+        g.add_relationship(rel.clone());
+        prov.add_relationship(rel.clone());
+
+        let req = AnswerRequest::incoming(target.clone(), 3); // proposed_change is None
+        let ans = AnswerEngine::analyze(&g, &prov, &[], &req);
+
+        assert_eq!(ans.summary.impacted_count, 1);
+        assert_eq!(ans.impacted_resources[0].resource, dep);
+        assert_eq!(ans.impacted_resources[0].depth, 1);
+        // Under legacy request, change_assessment must be None, and impact_type/impact_reason must be None
+        assert!(ans.change_assessment.is_none());
+        assert!(ans.impacted_resources[0].impact_type.is_none());
+        assert!(ans.impacted_resources[0].impact_reason.is_none());
     }
 }
