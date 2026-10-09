@@ -2141,4 +2141,289 @@ mod tests {
             && d.relationship.target == cm
             && d.relationship.kind == RelationshipKind::DEPENDS_ON));
     }
+
+    // -----------------------------------------------------------------------
+    // 38. ResourceReferenceRule: all Kubernetes declarative reference types
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resource_reference_all_k8s_declarative_reference_types() {
+        let pod = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("pod"),
+            "prod/web-pod-1",
+        );
+        let node = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("node"),
+            "prod-worker-1",
+        );
+        let cm = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("config_map"),
+            "prod/app-config",
+        );
+        let sec = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("secret"),
+            "prod/db-secret",
+        );
+        let pvc = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("persistent_volume_claim"),
+            "prod/data-pvc",
+        );
+        let sa = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("service_account"),
+            "prod/web-sa",
+        );
+        let ing = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("ingress"),
+            "prod/web-ingress",
+        );
+        let svc = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("service"),
+            "prod/web-service",
+        );
+
+        let ev_node = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            pod.clone(),
+            json!({
+                "reference_type": "pod_scheduled_node",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "node",
+                    "provider_id": "prod-worker-1"
+                }
+            }),
+        );
+
+        let ev_cm = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            pod.clone(),
+            json!({
+                "reference_type": "config_map_ref",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "config_map",
+                    "provider_id": "prod/app-config"
+                }
+            }),
+        );
+
+        let ev_sec = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            pod.clone(),
+            json!({
+                "reference_type": "secret_ref",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "secret",
+                    "provider_id": "prod/db-secret"
+                }
+            }),
+        );
+
+        let ev_pvc = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            pod.clone(),
+            json!({
+                "reference_type": "pvc_mount_ref",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "persistent_volume_claim",
+                    "provider_id": "prod/data-pvc"
+                }
+            }),
+        );
+
+        let ev_sa = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            pod.clone(),
+            json!({
+                "reference_type": "service_account_ref",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "service_account",
+                    "provider_id": "prod/web-sa"
+                }
+            }),
+        );
+
+        let ev_ing = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            ing.clone(),
+            json!({
+                "reference_type": "ingress_backend_ref",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "service",
+                    "provider_id": "prod/web-service"
+                }
+            }),
+        );
+
+        let rule = ResourceReferenceRule;
+        let results = rule.apply(&[
+            ev_node.clone(),
+            ev_cm.clone(),
+            ev_sec.clone(),
+            ev_pvc.clone(),
+            ev_sa.clone(),
+            ev_ing.clone(),
+        ]);
+
+        assert_eq!(results.len(), 6);
+        for res in &results {
+            let disc = res.discovered().expect("expected discovered relationship");
+            assert_eq!(disc.relationship.kind, RelationshipKind::DEPENDS_ON);
+            assert_eq!(
+                disc.relationship.category,
+                crate::relationship::RelationshipCategory::Dependency
+            );
+        }
+
+        let rels: Vec<_> = results.iter().map(|r| r.discovered().unwrap()).collect();
+        assert!(rels
+            .iter()
+            .any(|d| d.relationship.source == pod && d.relationship.target == node));
+        assert!(rels
+            .iter()
+            .any(|d| d.relationship.source == pod && d.relationship.target == cm));
+        assert!(rels
+            .iter()
+            .any(|d| d.relationship.source == pod && d.relationship.target == sec));
+        assert!(rels
+            .iter()
+            .any(|d| d.relationship.source == pod && d.relationship.target == pvc));
+        assert!(rels
+            .iter()
+            .any(|d| d.relationship.source == pod && d.relationship.target == sa));
+        assert!(rels
+            .iter()
+            .any(|d| d.relationship.source == ing && d.relationship.target == svc));
+    }
+
+    // -----------------------------------------------------------------------
+    // 39. ResourceReferenceRule: multiple observations merge supporting evidence IDs
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_resource_reference_multiple_observations_merge_evidence_ids() {
+        let pod = pod_identity("app-pod");
+        let cm = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("config_map"),
+            "default/shared-cfg",
+        );
+
+        // First observation: envFrom ConfigMap
+        let ev1 = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            pod.clone(),
+            json!({
+                "reference_type": "config_map_ref",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "config_map",
+                    "provider_id": "default/shared-cfg"
+                }
+            }),
+        );
+
+        // Second observation: volume ConfigMap
+        let ev2 = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::RESOURCE_REFERENCE,
+            pod.clone(),
+            json!({
+                "reference_type": "config_map_ref",
+                "target": {
+                    "provider": "kubernetes",
+                    "resource_type": "config_map",
+                    "provider_id": "default/shared-cfg"
+                }
+            }),
+        );
+
+        let rule = ResourceReferenceRule;
+        let results = rule.apply(&[ev1.clone(), ev2.clone()]);
+
+        assert_eq!(results.len(), 1);
+        let disc = results[0]
+            .discovered()
+            .expect("expected discovered relationship");
+        assert_eq!(disc.relationship.source, pod);
+        assert_eq!(disc.relationship.target, cm);
+        assert_eq!(disc.relationship.kind, RelationshipKind::DEPENDS_ON);
+        assert_eq!(disc.supporting_evidence.len(), 2);
+        assert!(disc.supporting_evidence.contains(&ev1.id));
+        assert!(disc.supporting_evidence.contains(&ev2.id));
+    }
+
+    // -----------------------------------------------------------------------
+    // 40. Negative Test: Service selector does NOT generate CALLS or DEPENDS_ON
+    // -----------------------------------------------------------------------
+    #[test]
+    fn test_negative_service_selector_does_not_create_relationships() {
+        let svc = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("service"),
+            "default/frontend-svc",
+        );
+        let pod = ResourceIdentity::new(
+            Provider::new("kubernetes"),
+            ResourceKind::new("pod"),
+            "default/frontend-pod",
+        );
+
+        // Service CONFIGURATION with selector
+        let svc_ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::CONFIGURATION,
+            svc.clone(),
+            json!({
+                "selector": { "app": "frontend" },
+                "type": "ClusterIP"
+            }),
+        );
+
+        // Pod CONFIGURATION with matching labels
+        let pod_ev = Evidence::new(
+            k8s_source(),
+            Utc::now(),
+            ObservationType::CONFIGURATION,
+            pod.clone(),
+            json!({
+                "labels": { "app": "frontend" }
+            }),
+        );
+
+        let engine = DiscoveryEngine::default_v2();
+        let results = engine.run(&[svc_ev, pod_ev]);
+
+        // Zero relationships should be derived from matching selectors/labels alone!
+        assert!(
+            results.is_empty(),
+            "architectural invariant violated: relationships derived merely from label selector matching"
+        );
+    }
 }

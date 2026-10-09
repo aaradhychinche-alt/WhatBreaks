@@ -40,6 +40,7 @@ type Client interface {
 	ListServices(ctx context.Context, namespace string) ([]Service, error)
 	ListIngresses(ctx context.Context, namespace string) ([]Ingress, error)
 	ListConfigMaps(ctx context.Context, namespace string) ([]ConfigMap, error)
+	ListServiceAccounts(ctx context.Context, namespace string) ([]ServiceAccount, error)
 	ListSecretsMetadata(ctx context.Context, namespace string) ([]SecretMetadata, error)
 	ListPVCs(ctx context.Context, namespace string) ([]PersistentVolumeClaim, error)
 	ListPVs(ctx context.Context) ([]PersistentVolume, error)
@@ -304,6 +305,14 @@ func (c *RESTClient) ListConfigMaps(ctx context.Context, namespace string) ([]Co
 		path = fmt.Sprintf("/api/v1/namespaces/%s/configmaps", url.PathEscape(namespace))
 	}
 	return getList[ConfigMap](ctx, c, path)
+}
+
+func (c *RESTClient) ListServiceAccounts(ctx context.Context, namespace string) ([]ServiceAccount, error) {
+	path := "/api/v1/serviceaccounts"
+	if namespace != "" {
+		path = fmt.Sprintf("/api/v1/namespaces/%s/serviceaccounts", url.PathEscape(namespace))
+	}
+	return getList[ServiceAccount](ctx, c, path)
 }
 
 // rawSecretItem is used strictly during unmarshaling to extract metadata and key names only.

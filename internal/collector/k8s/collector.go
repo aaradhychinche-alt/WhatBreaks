@@ -308,6 +308,16 @@ func (c *Collector) Collect(ctx context.Context) ([]*corev1.Evidence, error) {
 				}
 			}
 
+			// ServiceAccounts
+			serviceAccounts, err := c.client.ListServiceAccounts(trackCtx, ns)
+			if err != nil {
+				c.logger.Warn("Failed to list service accounts", "namespace", ns, "error", err.Error())
+			} else {
+				for i := range serviceAccounts {
+					allEvidence = append(allEvidence, c.normalizer.NormalizeServiceAccount(&serviceAccounts[i])...)
+				}
+			}
+
 			// Secrets (METADATA ONLY - SECRET SAFETY GUARANTEE)
 			secrets, err := c.client.ListSecretsMetadata(trackCtx, ns)
 			if err != nil {

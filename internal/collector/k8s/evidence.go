@@ -2,7 +2,7 @@ package k8s
 
 import (
 	"crypto/rand"
-	"encoding/hex"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -29,13 +29,15 @@ func GenerateEvidenceID() string {
 		uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16])
 }
 
-// DeterministicEvidenceID creates a reproducible UUID-formatted ID based on seed components.
+// DeterministicEvidenceID creates a reproducible UUIDv4-formatted ID based on seed components.
 func DeterministicEvidenceID(parts ...string) string {
-	h := hex.EncodeToString([]byte(fmt.Sprintf("%v", parts)))
-	if len(h) < 32 {
-		h = fmt.Sprintf("%032s", h)
-	}
-	return fmt.Sprintf("%s-%s-%s-%s-%s", h[0:8], h[8:12], h[12:16], h[16:20], h[20:32])
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%v", parts)))
+	var uuid [16]byte
+	copy(uuid[:], sum[:16])
+	uuid[6] = (uuid[6] & 0x0f) | 0x40 // Version 4
+	uuid[8] = (uuid[8] & 0x3f) | 0x80 // Variant RFC4122
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		uuid[0:4], uuid[4:6], uuid[6:8], uuid[8:10], uuid[10:16])
 }
 
 // ---------------------------------------------------------------------------
@@ -137,39 +139,46 @@ func (n *Normalizer) NormalizeNode(node *Node) []*corev1.Evidence {
 func (n *Normalizer) NormalizeDeployment(dep *Deployment) []*corev1.Evidence {
 	subject := BuildIdentity(n.clusterID, TypeDeployment, dep.ObjectMeta.Namespace, dep.ObjectMeta.Name)
 
-	containerImages := make([]string, 0, len(dep.Spec.Template.Spec.Containers))
+	containerImages := make([]string, 0, len(dep.Spec.Template.Spec.Containers)+len(dep.Spec.Template.Spec.InitContainers))
 	containerPorts := make([]map[string]any, 0)
 	configMapRefs := make([]string, 0)
 	secretRefs := make([]string, 0)
 
-	for _, c := range dep.Spec.Template.Spec.Containers {
-		containerImages = append(containerImages, c.Image)
-		for _, p := range c.Ports {
-			containerPorts = append(containerPorts, map[string]any{
-				"container": c.Name,
-				"port":      p.ContainerPort,
-				"protocol":  p.Protocol,
-			})
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom != nil {
-				if e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name != "" {
-					configMapRefs = append(configMapRefs, e.ValueFrom.ConfigMapKeyRef.Name)
-				}
-				if e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name != "" {
-					secretRefs = append(secretRefs, e.ValueFrom.SecretKeyRef.Name)
+	inspectContainers := func(containers []Container) {
+		for _, c := range containers {
+			if c.Image != "" {
+				containerImages = append(containerImages, c.Image)
+			}
+			for _, p := range c.Ports {
+				containerPorts = append(containerPorts, map[string]any{
+					"container": c.Name,
+					"port":      p.ContainerPort,
+					"protocol":  p.Protocol,
+				})
+			}
+			for _, e := range c.Env {
+				if e.ValueFrom != nil {
+					if e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name != "" {
+						configMapRefs = append(configMapRefs, e.ValueFrom.ConfigMapKeyRef.Name)
+					}
+					if e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name != "" {
+						secretRefs = append(secretRefs, e.ValueFrom.SecretKeyRef.Name)
+					}
 				}
 			}
-		}
-		for _, ef := range c.EnvFrom {
-			if ef.ConfigMapRef != nil && ef.ConfigMapRef.Name != "" {
-				configMapRefs = append(configMapRefs, ef.ConfigMapRef.Name)
-			}
-			if ef.SecretRef != nil && ef.SecretRef.Name != "" {
-				secretRefs = append(secretRefs, ef.SecretRef.Name)
+			for _, ef := range c.EnvFrom {
+				if ef.ConfigMapRef != nil && ef.ConfigMapRef.Name != "" {
+					configMapRefs = append(configMapRefs, ef.ConfigMapRef.Name)
+				}
+				if ef.SecretRef != nil && ef.SecretRef.Name != "" {
+					secretRefs = append(secretRefs, ef.SecretRef.Name)
+				}
 			}
 		}
 	}
+
+	inspectContainers(dep.Spec.Template.Spec.Containers)
+	inspectContainers(dep.Spec.Template.Spec.InitContainers)
 
 	for _, v := range dep.Spec.Template.Spec.Volumes {
 		if v.ConfigMap != nil && v.ConfigMap.Name != "" {
@@ -178,6 +187,21 @@ func (n *Normalizer) NormalizeDeployment(dep *Deployment) []*corev1.Evidence {
 		if v.Secret != nil && v.Secret.SecretName != "" {
 			secretRefs = append(secretRefs, v.Secret.SecretName)
 		}
+		if v.Projected != nil {
+			for _, s := range v.Projected.Sources {
+				if s.ConfigMap != nil && s.ConfigMap.Name != "" {
+					configMapRefs = append(configMapRefs, s.ConfigMap.Name)
+				}
+				if s.Secret != nil && s.Secret.Name != "" {
+					secretRefs = append(secretRefs, s.Secret.Name)
+				}
+			}
+		}
+	}
+
+	sa := dep.Spec.Template.Spec.ServiceAccountName
+	if sa == "" {
+		sa = dep.Spec.Template.Spec.ServiceAccount
 	}
 
 	configData := map[string]any{
@@ -185,7 +209,7 @@ func (n *Normalizer) NormalizeDeployment(dep *Deployment) []*corev1.Evidence {
 		"selector":        dep.Spec.Selector.MatchLabels,
 		"images":          containerImages,
 		"ports":           containerPorts,
-		"service_account": dep.Spec.Template.Spec.ServiceAccountName,
+		"service_account": sa,
 		"cluster_id":      n.clusterID,
 	}
 
@@ -210,7 +234,7 @@ func (n *Normalizer) NormalizeDeployment(dep *Deployment) []*corev1.Evidence {
 	// ConfigMap references
 	seenCM := make(map[string]bool)
 	for _, cmName := range configMapRefs {
-		if !seenCM[cmName] {
+		if cmName != "" && !seenCM[cmName] {
 			seenCM[cmName] = true
 			targetCM := BuildIdentity(n.clusterID, TypeConfigMap, dep.ObjectMeta.Namespace, cmName)
 			refData := map[string]any{
@@ -224,7 +248,7 @@ func (n *Normalizer) NormalizeDeployment(dep *Deployment) []*corev1.Evidence {
 	// Secret references (name only!)
 	seenSec := make(map[string]bool)
 	for _, secName := range secretRefs {
-		if !seenSec[secName] {
+		if secName != "" && !seenSec[secName] {
 			seenSec[secName] = true
 			targetSec := BuildIdentity(n.clusterID, TypeSecret, dep.ObjectMeta.Namespace, secName)
 			refData := map[string]any{
@@ -236,7 +260,7 @@ func (n *Normalizer) NormalizeDeployment(dep *Deployment) []*corev1.Evidence {
 	}
 
 	// ServiceAccount reference
-	if sa := dep.Spec.Template.Spec.ServiceAccountName; sa != "" && sa != "default" {
+	if sa != "" && sa != "default" {
 		targetSA := BuildIdentity(n.clusterID, TypeServiceAccount, dep.ObjectMeta.Namespace, sa)
 		refData := map[string]any{
 			"reference_type": "service_account_ref",
@@ -337,6 +361,11 @@ func (n *Normalizer) NormalizeIngress(ing *Ingress) []*corev1.Evidence {
 	servicesReferenced := make([]string, 0)
 	tlsSecretsReferenced := make([]string, 0)
 
+	// Explicit defaultBackend reference
+	if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil && ing.Spec.DefaultBackend.Service.Name != "" {
+		servicesReferenced = append(servicesReferenced, ing.Spec.DefaultBackend.Service.Name)
+	}
+
 	for _, rule := range ing.Spec.Rules {
 		ruleInfo := map[string]any{
 			"host": rule.Host,
@@ -348,7 +377,7 @@ func (n *Normalizer) NormalizeIngress(ing *Ingress) []*corev1.Evidence {
 					"path":      p.Path,
 					"path_type": p.PathType,
 				}
-				if p.Backend.Service != nil {
+				if p.Backend.Service != nil && p.Backend.Service.Name != "" {
 					pathInfo["service_name"] = p.Backend.Service.Name
 					pathInfo["service_port"] = p.Backend.Service.Port.Number
 					servicesReferenced = append(servicesReferenced, p.Backend.Service.Name)
@@ -376,14 +405,14 @@ func (n *Normalizer) NormalizeIngress(ing *Ingress) []*corev1.Evidence {
 		n.buildEvidence(ObservationConfiguration, subject, configData),
 	}
 
-	// Service references
+	// Explicit Service backend references
 	seenSvc := make(map[string]bool)
 	for _, svcName := range servicesReferenced {
-		if !seenSvc[svcName] {
+		if svcName != "" && !seenSvc[svcName] {
 			seenSvc[svcName] = true
 			targetSvc := BuildIdentity(n.clusterID, TypeService, ing.ObjectMeta.Namespace, svcName)
 			refData := map[string]any{
-				"reference_type": "ingress_service_backend",
+				"reference_type": "ingress_backend_ref",
 				"target":         targetSvc,
 			}
 			evs = append(evs, n.buildEvidence(ObservationResourceReference, subject, refData))
@@ -393,7 +422,7 @@ func (n *Normalizer) NormalizeIngress(ing *Ingress) []*corev1.Evidence {
 	// TLS secret references (names only!)
 	seenSec := make(map[string]bool)
 	for _, secName := range tlsSecretsReferenced {
-		if !seenSec[secName] {
+		if secName != "" && !seenSec[secName] {
 			seenSec[secName] = true
 			targetSec := BuildIdentity(n.clusterID, TypeSecret, ing.ObjectMeta.Namespace, secName)
 			refData := map[string]any{
@@ -416,34 +445,39 @@ func (n *Normalizer) NormalizePod(pod *Pod) []*corev1.Evidence {
 	secretRefs := make([]string, 0)
 	pvcRefs := make([]string, 0)
 
-	for _, c := range pod.Spec.Containers {
-		for _, p := range c.Ports {
-			containerPorts = append(containerPorts, map[string]any{
-				"container":      c.Name,
-				"container_port": p.ContainerPort,
-				"host_port":      p.HostPort,
-				"protocol":       p.Protocol,
-			})
-		}
-		for _, e := range c.Env {
-			if e.ValueFrom != nil {
-				if e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name != "" {
-					configMapRefs = append(configMapRefs, e.ValueFrom.ConfigMapKeyRef.Name)
-				}
-				if e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name != "" {
-					secretRefs = append(secretRefs, e.ValueFrom.SecretKeyRef.Name)
+	inspectContainers := func(containers []Container) {
+		for _, c := range containers {
+			for _, p := range c.Ports {
+				containerPorts = append(containerPorts, map[string]any{
+					"container":      c.Name,
+					"container_port": p.ContainerPort,
+					"host_port":      p.HostPort,
+					"protocol":       p.Protocol,
+				})
+			}
+			for _, e := range c.Env {
+				if e.ValueFrom != nil {
+					if e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name != "" {
+						configMapRefs = append(configMapRefs, e.ValueFrom.ConfigMapKeyRef.Name)
+					}
+					if e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name != "" {
+						secretRefs = append(secretRefs, e.ValueFrom.SecretKeyRef.Name)
+					}
 				}
 			}
-		}
-		for _, ef := range c.EnvFrom {
-			if ef.ConfigMapRef != nil && ef.ConfigMapRef.Name != "" {
-				configMapRefs = append(configMapRefs, ef.ConfigMapRef.Name)
-			}
-			if ef.SecretRef != nil && ef.SecretRef.Name != "" {
-				secretRefs = append(secretRefs, ef.SecretRef.Name)
+			for _, ef := range c.EnvFrom {
+				if ef.ConfigMapRef != nil && ef.ConfigMapRef.Name != "" {
+					configMapRefs = append(configMapRefs, ef.ConfigMapRef.Name)
+				}
+				if ef.SecretRef != nil && ef.SecretRef.Name != "" {
+					secretRefs = append(secretRefs, ef.SecretRef.Name)
+				}
 			}
 		}
 	}
+
+	inspectContainers(pod.Spec.Containers)
+	inspectContainers(pod.Spec.InitContainers)
 
 	for _, v := range pod.Spec.Volumes {
 		if v.ConfigMap != nil && v.ConfigMap.Name != "" {
@@ -452,9 +486,24 @@ func (n *Normalizer) NormalizePod(pod *Pod) []*corev1.Evidence {
 		if v.Secret != nil && v.Secret.SecretName != "" {
 			secretRefs = append(secretRefs, v.Secret.SecretName)
 		}
+		if v.Projected != nil {
+			for _, s := range v.Projected.Sources {
+				if s.ConfigMap != nil && s.ConfigMap.Name != "" {
+					configMapRefs = append(configMapRefs, s.ConfigMap.Name)
+				}
+				if s.Secret != nil && s.Secret.Name != "" {
+					secretRefs = append(secretRefs, s.Secret.Name)
+				}
+			}
+		}
 		if v.PersistentVolumeClaim != nil && v.PersistentVolumeClaim.ClaimName != "" {
 			pvcRefs = append(pvcRefs, v.PersistentVolumeClaim.ClaimName)
 		}
+	}
+
+	sa := pod.Spec.ServiceAccountName
+	if sa == "" {
+		sa = pod.Spec.ServiceAccount
 	}
 
 	configData := map[string]any{
@@ -462,7 +511,7 @@ func (n *Normalizer) NormalizePod(pod *Pod) []*corev1.Evidence {
 		"phase":           pod.Status.Phase,
 		"pod_ip":          pod.Status.PodIP,
 		"host_ip":         pod.Status.HostIP,
-		"service_account": pod.Spec.ServiceAccountName,
+		"service_account": sa,
 		"ports":           containerPorts,
 		"cluster_id":      n.clusterID,
 	}
@@ -501,7 +550,7 @@ func (n *Normalizer) NormalizePod(pod *Pod) []*corev1.Evidence {
 		}
 	}
 
-	// Node reference
+	// 1. Node reference (pod_scheduled_node)
 	if pod.Spec.NodeName != "" {
 		targetNode := BuildIdentity(n.clusterID, TypeNode, "", pod.Spec.NodeName)
 		refData := map[string]any{
@@ -511,8 +560,50 @@ func (n *Normalizer) NormalizePod(pod *Pod) []*corev1.Evidence {
 		evs = append(evs, n.buildEvidence(ObservationResourceReference, subject, refData))
 	}
 
-	// ServiceAccount reference
-	if sa := pod.Spec.ServiceAccountName; sa != "" && sa != "default" {
+	// 2. ConfigMap references (config_map_ref)
+	seenCM := make(map[string]bool)
+	for _, cmName := range configMapRefs {
+		if cmName != "" && !seenCM[cmName] {
+			seenCM[cmName] = true
+			targetCM := BuildIdentity(n.clusterID, TypeConfigMap, pod.ObjectMeta.Namespace, cmName)
+			refData := map[string]any{
+				"reference_type": "config_map_ref",
+				"target":         targetCM,
+			}
+			evs = append(evs, n.buildEvidence(ObservationResourceReference, subject, refData))
+		}
+	}
+
+	// 3. Secret references (secret_ref) - metadata only, ZERO SECRET CUSTODY
+	seenSec := make(map[string]bool)
+	for _, secName := range secretRefs {
+		if secName != "" && !seenSec[secName] {
+			seenSec[secName] = true
+			targetSec := BuildIdentity(n.clusterID, TypeSecret, pod.ObjectMeta.Namespace, secName)
+			refData := map[string]any{
+				"reference_type": "secret_ref",
+				"target":         targetSec,
+			}
+			evs = append(evs, n.buildEvidence(ObservationResourceReference, subject, refData))
+		}
+	}
+
+	// 4. PVC references (pvc_mount_ref)
+	seenPVC := make(map[string]bool)
+	for _, pvc := range pvcRefs {
+		if pvc != "" && !seenPVC[pvc] {
+			seenPVC[pvc] = true
+			targetPVC := BuildIdentity(n.clusterID, TypePersistentVolumeClaim, pod.ObjectMeta.Namespace, pvc)
+			refData := map[string]any{
+				"reference_type": "pvc_mount_ref",
+				"target":         targetPVC,
+			}
+			evs = append(evs, n.buildEvidence(ObservationResourceReference, subject, refData))
+		}
+	}
+
+	// 5. ServiceAccount reference (service_account_ref)
+	if sa != "" {
 		targetSA := BuildIdentity(n.clusterID, TypeServiceAccount, pod.ObjectMeta.Namespace, sa)
 		refData := map[string]any{
 			"reference_type": "service_account_ref",
@@ -521,17 +612,20 @@ func (n *Normalizer) NormalizePod(pod *Pod) []*corev1.Evidence {
 		evs = append(evs, n.buildEvidence(ObservationResourceReference, subject, refData))
 	}
 
-	// PVC references
-	for _, pvc := range pvcRefs {
-		targetPVC := BuildIdentity(n.clusterID, TypePersistentVolumeClaim, pod.ObjectMeta.Namespace, pvc)
-		refData := map[string]any{
-			"reference_type": "pvc_mount_ref",
-			"target":         targetPVC,
-		}
-		evs = append(evs, n.buildEvidence(ObservationResourceReference, subject, refData))
-	}
-
 	return evs
+}
+
+// NormalizeServiceAccount produces evidence for a ServiceAccount.
+func (n *Normalizer) NormalizeServiceAccount(sa *ServiceAccount) []*corev1.Evidence {
+	subject := BuildIdentity(n.clusterID, TypeServiceAccount, sa.ObjectMeta.Namespace, sa.ObjectMeta.Name)
+	data := map[string]any{
+		"name":       sa.ObjectMeta.Name,
+		"namespace":  sa.ObjectMeta.Namespace,
+		"cluster_id": n.clusterID,
+	}
+	return []*corev1.Evidence{
+		n.buildEvidence(ObservationConfiguration, subject, data),
+	}
 }
 
 // NormalizeConfigMap produces evidence for a ConfigMap.

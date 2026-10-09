@@ -75,6 +75,8 @@ type Pod struct {
 type PodSpec struct {
 	NodeName           string      `json:"nodeName,omitempty"`
 	ServiceAccountName string      `json:"serviceAccountName,omitempty"`
+	ServiceAccount     string      `json:"serviceAccount,omitempty"`
+	InitContainers     []Container `json:"initContainers,omitempty"`
 	Containers         []Container `json:"containers,omitempty"`
 	Volumes            []Volume    `json:"volumes,omitempty"`
 }
@@ -142,6 +144,24 @@ type Volume struct {
 	ConfigMap             *ConfigMapVolumeSource `json:"configMap,omitempty"`
 	Secret                *SecretVolumeSource    `json:"secret,omitempty"`
 	PersistentVolumeClaim *PVCVolumeSource       `json:"persistentVolumeClaim,omitempty"`
+	Projected             *ProjectedVolumeSource `json:"projected,omitempty"`
+}
+
+type ProjectedVolumeSource struct {
+	Sources []VolumeProjection `json:"sources,omitempty"`
+}
+
+type VolumeProjection struct {
+	ConfigMap *ConfigMapProjection `json:"configMap,omitempty"`
+	Secret    *SecretProjection    `json:"secret,omitempty"`
+}
+
+type ConfigMapProjection struct {
+	Name string `json:"name,omitempty"`
+}
+
+type SecretProjection struct {
+	Name string `json:"name,omitempty"`
 }
 
 type ConfigMapVolumeSource struct {
@@ -255,9 +275,10 @@ type Ingress struct {
 }
 
 type IngressSpec struct {
-	IngressClassName *string       `json:"ingressClassName,omitempty"`
-	Rules            []IngressRule `json:"rules,omitempty"`
-	TLS              []IngressTLS  `json:"tls,omitempty"`
+	IngressClassName *string         `json:"ingressClassName,omitempty"`
+	DefaultBackend   *IngressBackend `json:"defaultBackend,omitempty"`
+	Rules            []IngressRule   `json:"rules,omitempty"`
+	TLS              []IngressTLS    `json:"tls,omitempty"`
 }
 
 type IngressRule struct {
@@ -292,6 +313,11 @@ type IngressServiceBackendPort struct {
 type IngressTLS struct {
 	Hosts      []string `json:"hosts,omitempty"`
 	SecretName string   `json:"secretName,omitempty"`
+}
+
+// ServiceAccount represents a Kubernetes ServiceAccount.
+type ServiceAccount struct {
+	ObjectMeta ObjectMeta `json:"metadata"`
 }
 
 // ConfigMap represents a Kubernetes ConfigMap.
