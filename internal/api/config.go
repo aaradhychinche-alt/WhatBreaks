@@ -11,6 +11,7 @@ import (
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/collector/k8s"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/config"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/database"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/discovery"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/health"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/state"
@@ -60,6 +61,7 @@ type Config struct {
 	Store                 state.Store
 	Reconciler            state.Reconciler
 	K8sCollector          *k8s.Collector
+	Coordinator           discovery.Coordinator
 	ConfiguredWorkspaceID string
 	WorkspaceAuthorizer   *auth.WorkspaceAuthorizer
 }

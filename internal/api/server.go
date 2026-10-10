@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/discovery"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/health"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
 )
@@ -19,6 +20,7 @@ type Server struct {
 	logger      logging.Logger
 	rateLimiter *RateLimiter
 	csrfManager *CSRFManager
+	coordinator discovery.Coordinator
 	mux         *http.ServeMux
 	handler     http.Handler
 	httpServer  *http.Server
@@ -38,6 +40,19 @@ func NewServer(cfg Config) *Server {
 	rateLimiter := NewRateLimiter(cfg.RateLimitWindow, cfg.RateLimitMax, cfg.IsDevelopment || cfg.IsTest, cfg.Logger)
 	csrfManager := NewCSRFManager(cfg.SessionSecret, cfg.CsrfCookieName, cfg.SessionCookie, cfg.IsTest)
 
+	coordinator := cfg.Coordinator
+	if coordinator == nil {
+		var coordOpts []discovery.Option
+		coordOpts = append(coordOpts, discovery.WithLogger(cfg.Logger))
+		if cfg.K8sCollector != nil {
+			coordOpts = append(coordOpts, discovery.WithCollector(cfg.K8sCollector))
+		}
+		if cfg.Reconciler != nil {
+			coordOpts = append(coordOpts, discovery.WithReconciler(cfg.Reconciler))
+		}
+		coordinator = discovery.NewCoordinator(coordOpts...)
+	}
+
 	mux := http.NewServeMux()
 
 	s := &Server{
@@ -45,6 +60,7 @@ func NewServer(cfg Config) *Server {
 		logger:      cfg.Logger,
 		rateLimiter: rateLimiter,
 		csrfManager: csrfManager,
+		coordinator: coordinator,
 		mux:         mux,
 	}
 
@@ -74,8 +90,7 @@ func (s *Server) setupRoutes() {
 	s.mux.Handle("GET /api/v1/resources/detail", s.handleResourceDetail())
 
 	// 4. Manual discovery sync endpoint
-	syncMgr := NewDiscoverySyncManager()
-	s.mux.Handle("POST /api/v1/discovery/sync", s.handleDiscoverySync(syncMgr))
+	s.mux.Handle("POST /api/v1/discovery/sync", s.handleDiscoverySync())
 
 	// 5. Impact analysis endpoint (if configured)
 	if s.cfg.ImpactHandler != nil {

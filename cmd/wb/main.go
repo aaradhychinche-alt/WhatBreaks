@@ -17,6 +17,7 @@ import (
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/config"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/coreclient"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/database"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/discovery"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/health"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/platform"
@@ -223,6 +224,19 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, te
 		apiCfg.K8sCollector = k8sCol
 		platformOpts = append(platformOpts, platform.WithK8sCollector(k8sCol))
 	}
+
+	// 6. Initialize Shared Discovery Coordinator
+	var coordOpts []discovery.Option
+	coordOpts = append(coordOpts, discovery.WithLogger(logger))
+	if apiCfg.Reconciler != nil {
+		coordOpts = append(coordOpts, discovery.WithReconciler(apiCfg.Reconciler))
+	}
+	if apiCfg.K8sCollector != nil {
+		coordOpts = append(coordOpts, discovery.WithCollector(apiCfg.K8sCollector))
+	}
+	discCoord := discovery.NewCoordinator(coordOpts...)
+	apiCfg.Coordinator = discCoord
+	platformOpts = append(platformOpts, platform.WithDiscoveryCoordinator(discCoord))
 
 	apiSrv := api.NewServer(apiCfg)
 	platformOpts = append(platformOpts, platform.WithAPIServer(apiSrv))

@@ -11,6 +11,7 @@ import (
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/config"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/coreclient"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/database"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/discovery"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/health"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/lifecycle"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
@@ -24,9 +25,10 @@ type Platform struct {
 	Database     *database.Database
 	Scheduler    *scheduler.TaskScheduler
 	APIServer    *api.Server
-	HealthServer *health.Server
-	K8sCollector *k8s.Collector
-	CoreClient   *coreclient.Client
+	HealthServer         *health.Server
+	K8sCollector         *k8s.Collector
+	DiscoveryCoordinator discovery.Coordinator
+	CoreClient           *coreclient.Client
 	Lifecycle    *lifecycle.ControllerLifecycle
 	Runtime      *lifecycle.Runtime
 	HealthState  *health.State
@@ -88,6 +90,13 @@ func WithLifecycle(lc *lifecycle.ControllerLifecycle) Option {
 func WithK8sCollector(col *k8s.Collector) Option {
 	return func(p *Platform) {
 		p.K8sCollector = col
+	}
+}
+
+// WithDiscoveryCoordinator assigns a Discovery Coordinator instance to Platform.
+func WithDiscoveryCoordinator(coord discovery.Coordinator) Option {
+	return func(p *Platform) {
+		p.DiscoveryCoordinator = coord
 	}
 }
 
