@@ -88,7 +88,7 @@ func (rl *RateLimiter) IsExempt(r *http.Request) bool {
 	}
 
 	// Session and CSRF token endpoints
-	if path == "/api/session" || path == "/api/csrf-token" {
+	if path == "/api/session" || path == "/api/csrf-token" || path == "/api/v1/csrf" {
 		return true
 	}
 

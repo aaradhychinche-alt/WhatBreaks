@@ -216,3 +216,28 @@ func TestDatabase_ConnectionStringsAndSecretSafety(t *testing.T) {
 		t.Fatalf("GetSafeConnectionString mismatch:\ngot:  %s\nwant: %s", safeDsn, expectedSafe)
 	}
 }
+
+func TestDatabase_Production_NoTestDBFallback(t *testing.T) {
+	env := map[string]string{
+		"NODE_ENV":         "production",
+		"TEST_DB_USER":     "test_admin",
+		"TEST_DB_NAME":     "test_database",
+		"TEST_DB_PASSWORD": "test_secret_pass",
+	}
+
+	cfg, err := LoadDatabaseConfig(MapEnv(env))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// In production, TEST_DB_* must NOT override default database config
+	if cfg.User != DefaultDbUser {
+		t.Errorf("expected DefaultDbUser in production, got %q", cfg.User)
+	}
+	if cfg.Database != DefaultDbName {
+		t.Errorf("expected DefaultDbName in production, got %q", cfg.Database)
+	}
+	if cfg.Password != "" {
+		t.Errorf("expected empty password in production, got %q", cfg.Password)
+	}
+}

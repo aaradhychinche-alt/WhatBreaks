@@ -12,6 +12,7 @@ var (
 		"Authorization",
 		"X-Requested-With",
 		"X-CSRF-Token",
+		"X-Workspace-ID",
 		"Idempotency-Key",
 	}
 )

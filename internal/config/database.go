@@ -70,17 +70,39 @@ func LoadDatabaseConfig(env EnvLookup) (*DatabaseConfig, error) {
 		port = p
 	}
 
+	nodeEnv, _ := LookupWithFallback(env, "NODE_ENV", "WB_ENV")
+	isProd := strings.ToLower(strings.TrimSpace(nodeEnv)) == "production"
+
 	name, _ := LookupWithFallback(env, "DB_NAME")
 	if strings.TrimSpace(name) == "" {
-		name = DefaultDbName
+		if !isProd {
+			if testName, ok := env("TEST_DB_NAME"); ok && strings.TrimSpace(testName) != "" {
+				name = testName
+			}
+		}
+		if name == "" {
+			name = DefaultDbName
+		}
 	}
 
 	user, _ := LookupWithFallback(env, "DB_USER")
 	if strings.TrimSpace(user) == "" {
-		user = DefaultDbUser
+		if !isProd {
+			if testUser, ok := env("TEST_DB_USER"); ok && strings.TrimSpace(testUser) != "" {
+				user = testUser
+			}
+		}
+		if user == "" {
+			user = DefaultDbUser
+		}
 	}
 
 	password, _ := LookupWithFallback(env, "DB_PASSWORD")
+	if strings.TrimSpace(password) == "" && !isProd {
+		if testPass, ok := env("TEST_DB_PASSWORD"); ok && strings.TrimSpace(testPass) != "" {
+			password = testPass
+		}
+	}
 
 	// Pool settings
 	poolMax := DefaultDbPoolMax
@@ -121,7 +143,7 @@ func LoadDatabaseConfig(env EnvLookup) (*DatabaseConfig, error) {
 	// SSL configuration
 	sslMode, _ := LookupWithFallback(env, "DB_SSL")
 	caPath, _ := LookupWithFallback(env, "PGSSLROOTCERT")
-	nodeEnv, _ := LookupWithFallback(env, "NODE_ENV")
+	nodeEnv, _ = LookupWithFallback(env, "NODE_ENV")
 	isProduction := strings.ToLower(strings.TrimSpace(nodeEnv)) == "production"
 
 	var ssl *SSLConfig

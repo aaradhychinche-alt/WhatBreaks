@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/auth"
@@ -26,6 +27,9 @@ func NewCSRFManager(sessionSecret string, cookieName string, cookieConfig auth.C
 	if cookieName == "" {
 		cookieName = "x-csrf-token"
 	}
+	if sessionSecret == "" && isTestMode {
+		sessionSecret = "whatbreaks-test-csrf-secret-key-32bytes"
+	}
 
 	return &CSRFManager{
 		secret:       []byte(sessionSecret),
@@ -38,6 +42,9 @@ func NewCSRFManager(sessionSecret string, cookieName string, cookieConfig auth.C
 // GenerateToken generates a cryptographically random cookie nonce,
 // computes the HMAC-SHA256 token, and returns both the cookie nonce and the header token.
 func (m *CSRFManager) GenerateToken() (cookieNonce string, headerToken string, err error) {
+	if len(m.secret) == 0 {
+		return "", "", errors.New("cannot generate CSRF token: session secret is empty")
+	}
 	rawNonce := make([]byte, 32)
 	if _, err := rand.Read(rawNonce); err != nil {
 		return "", "", err
@@ -104,7 +111,7 @@ func (m *CSRFManager) Middleware() func(http.Handler) http.Handler {
 
 			// 3. Exempt endpoints
 			path := r.URL.Path
-			if path == "/api/csrf-token" || path == "/health" || path == "/healthz" || path == "/readyz" {
+			if path == "/api/csrf-token" || path == "/api/v1/csrf" || path == "/health" || path == "/healthz" || path == "/readyz" {
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -11,13 +11,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/answer"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/api"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/collector/k8s"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/config"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/coreclient"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/database"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/health"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/platform"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/scheduler"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/state"
 )
 
 var (
@@ -40,12 +44,13 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, te
 
 	showHelp := fs.Bool("help", false, "Show help message")
 	showVersion := fs.Bool("version", false, "Show version")
-	apiPort := fs.Int("api-port", api.DefaultPort, "HTTP API server port")
-	healthPort := fs.Int("health-port", config.DefaultHealthPort, "HTTP health probe server port")
+	apiPort := fs.Int("api-port", 8080, "HTTP API server port")
+	healthPort := fs.Int("health-port", 8081, "HTTP health probe server port")
 	coreAddr := fs.String("core-engine-addr", config.DefaultCoreEngineAddress, "Rust Core Engine gRPC endpoint")
-	k8sEnable := fs.Bool("enable-k8s", false, "Enable Kubernetes collector")
+	workspaceID := fs.String("workspace-id", "00000000-0000-0000-0000-000000000001", "Workspace UUID identifier")
+	k8sEnable := fs.Bool("enable-k8s", true, "Enable Kubernetes collector")
 	k8sAPIURL := fs.String("k8s-api-url", "", "Kubernetes API server URL")
-	k8sClusterID := fs.String("k8s-cluster-id", "", "Kubernetes cluster identifier")
+	k8sClusterID := fs.String("k8s-cluster-id", "k8s-cluster", "Kubernetes cluster identifier")
 	k8sClusterWide := fs.Bool("k8s-cluster-wide", false, "Enable cluster-wide Kubernetes collection")
 	k8sNamespaces := fs.String("k8s-namespaces", "", "Comma-separated list of namespaces to observe")
 
@@ -103,12 +108,12 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, te
 	healthState := health.NewState()
 	healthSrv := health.NewServer("0.0.0.0", *healthPort, healthState, logger)
 
-	// 2. HTTP API Server
+	// 2. HTTP API Server Config
 	apiCfg := api.NewConfigFromEnv(envLookup, logger)
 	if *apiPort != api.DefaultPort {
 		apiCfg.Port = *apiPort
 	}
-	apiSrv := api.NewServer(apiCfg)
+	apiCfg.ConfiguredWorkspaceID = *workspaceID
 
 	// 3. Worker Task Scheduler
 	sched := scheduler.New(scheduler.WithLogger(logger))
@@ -116,12 +121,72 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, te
 	// 4. Assembled Platform
 	var platformOpts []platform.Option
 	platformOpts = append(platformOpts,
-		platform.WithAPIServer(apiSrv),
 		platform.WithHealthServer(healthSrv),
 		platform.WithHealthState(healthState),
 		platform.WithScheduler(sched),
 	)
 
+	// Connect Database if configured
+	var pgStore state.Store
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer dbCancel()
+
+	if dbCfg, err := config.LoadDatabaseConfig(envLookup); err == nil {
+		db, dbErr := database.New(dbCtx, dbCfg, database.WithLogger(logger))
+		if dbErr == nil {
+			if (apiCfg.IsDevelopment || apiCfg.IsTest) && dbCfg.User == config.DefaultDbUser {
+				if testErr := db.TestConnection(dbCtx); testErr != nil {
+					// In development or test, retry with local development user "postgres" if default "whatbreaks" role is not configured
+					fallbackCfg := *dbCfg
+					fallbackCfg.User = "postgres"
+					fallbackCfg.Database = "postgres"
+					if altDb, altErr := database.New(dbCtx, &fallbackCfg, database.WithLogger(logger)); altErr == nil {
+						if altDb.TestConnection(dbCtx) == nil {
+							db = altDb
+							dbCfg = &fallbackCfg
+							dbErr = nil
+						}
+					}
+				}
+			}
+		}
+
+		if dbErr == nil && db.TestConnection(dbCtx) == nil {
+			if schemaErr := state.EnsureSchema(dbCtx, db); schemaErr != nil {
+				logger.Error("Failed to apply database schema", "error", schemaErr)
+			}
+			pgStore = state.NewPostgresStore(db)
+			apiCfg.Store = pgStore
+			apiCfg.Database = db
+			platformOpts = append(platformOpts, platform.WithDatabase(db))
+			logger.Info("Connected to PostgreSQL state database", "host", dbCfg.Host, "db", dbCfg.Database, "user", dbCfg.User)
+		} else {
+			logger.Warn("PostgreSQL not connected or auth failed, running in stateless mode", "host", dbCfg.Host, "db", dbCfg.Database)
+		}
+	}
+
+	// Connect Rust Core Engine gRPC Client
+	var coreClient *coreclient.Client
+	if *coreAddr != "" {
+		grpcCtx, grpcCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer grpcCancel()
+		if client, err := coreclient.Connect(grpcCtx, *coreAddr); err == nil {
+			coreClient = client
+			answerSvc := answer.NewService(coreClient, logger)
+			apiCfg.ImpactHandler = answer.NewHandler(answerSvc, answer.WithLogger(logger))
+			logger.Info("Connected to Rust Core Engine", "address", *coreAddr)
+
+			if pgStore != nil {
+				materializer := state.NewMaterializer(pgStore, coreClient, logger)
+				reconciler := state.NewReconciler(pgStore, coreClient, materializer, logger)
+				apiCfg.Reconciler = reconciler
+			}
+		} else {
+			logger.Info("Rust Core Engine not reachable, impact analysis disabled", "address", *coreAddr, "reason", err.Error())
+		}
+	}
+
+	// 5. Initialize Kubernetes Collector if enabled
 	if *k8sEnable || *k8sAPIURL != "" {
 		k8sClient, err := k8s.NewRESTClient(k8s.ClientConfig{
 			BaseURL: *k8sAPIURL,
@@ -139,21 +204,30 @@ func run(args []string, getenv func(string) string, stdout, stderr io.Writer, te
 				}
 			}
 		}
-		k8sCol, err := k8s.New(
+		colOpts := []k8s.Option{
 			k8s.WithClient(k8sClient),
 			k8s.WithClusterID(*k8sClusterID),
+			k8s.WithWorkspaceID(*workspaceID),
 			k8s.WithClusterWide(*k8sClusterWide),
 			k8s.WithNamespaces(namespaces...),
 			k8s.WithLogger(logger),
-		)
+		}
+		if coreClient != nil {
+			colOpts = append(colOpts, k8s.WithCoreClient(coreClient))
+		}
+		k8sCol, err := k8s.New(colOpts...)
 		if err != nil {
 			logger.Error("Failed to initialize Kubernetes collector", "error", err)
 			return 1
 		}
+		apiCfg.K8sCollector = k8sCol
 		platformOpts = append(platformOpts, platform.WithK8sCollector(k8sCol))
 	}
 
-	app := platform.New(cfg, logger, nil, platformOpts...)
+	apiSrv := api.NewServer(apiCfg)
+	platformOpts = append(platformOpts, platform.WithAPIServer(apiSrv))
+
+	app := platform.New(cfg, logger, coreClient, platformOpts...)
 
 	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer startCancel()

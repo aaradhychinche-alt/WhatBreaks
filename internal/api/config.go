@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/auth"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/collector/k8s"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/config"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/database"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/health"
 	"github.com/aaradhychinche-alt/WhatBreaks/internal/logging"
+	"github.com/aaradhychinche-alt/WhatBreaks/internal/state"
 )
 
 const (
@@ -33,28 +35,33 @@ const (
 
 // Config encapsulates runtime configuration for the API server.
 type Config struct {
-	Host              string
-	Port              int
-	AppURL            string
-	MaxBodyBytes      int64
-	ShutdownTimeout   time.Duration
-	SessionSecret     string
-	Environment       string
-	IsDevelopment     bool
-	IsTest            bool
-	Logger            logging.Logger
-	AllowedOrigins    []string
-	Env               config.EnvLookup
-	Database          *database.Database
-	HealthPinger      health.DBPinger
-	SessionCookie     auth.CookieConfig
-	CsrfCookieName    string
-	RateLimitWindow   time.Duration
-	RateLimitMax      int
-	SpeedLimitWindow  time.Duration
-	SpeedLimitDelayAt int
-	SpeedLimitDelayMs time.Duration
-	ImpactHandler     http.Handler
+	Host                  string
+	Port                  int
+	AppURL                string
+	MaxBodyBytes          int64
+	ShutdownTimeout       time.Duration
+	SessionSecret         string
+	Environment           string
+	IsDevelopment         bool
+	IsTest                bool
+	Logger                logging.Logger
+	AllowedOrigins        []string
+	Env                   config.EnvLookup
+	Database              *database.Database
+	HealthPinger          health.DBPinger
+	SessionCookie         auth.CookieConfig
+	CsrfCookieName        string
+	RateLimitWindow       time.Duration
+	RateLimitMax          int
+	SpeedLimitWindow      time.Duration
+	SpeedLimitDelayAt     int
+	SpeedLimitDelayMs     time.Duration
+	ImpactHandler         http.Handler
+	Store                 state.Store
+	Reconciler            state.Reconciler
+	K8sCollector          *k8s.Collector
+	ConfiguredWorkspaceID string
+	WorkspaceAuthorizer   *auth.WorkspaceAuthorizer
 }
 
 // DefaultConfig returns an API Config populated with default settings.
@@ -100,6 +107,9 @@ func NewConfigFromEnv(env config.EnvLookup, logger logging.Logger) Config {
 	isTest := strings.ToLower(strings.TrimSpace(nodeEnv)) == "test"
 
 	sessionSecret, _ := env("SESSION_SECRET")
+	if sessionSecret == "" && (isDev || isTest) {
+		sessionSecret = "whatbreaks-development-session-secret-key-32bytes"
+	}
 
 	sessionCookie := auth.ResolveSessionCookieOptions(env)
 	csrfCookieName := auth.ResolveCsrfCookieName(env, sessionCookie)

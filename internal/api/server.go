@@ -67,13 +67,22 @@ func (s *Server) setupRoutes() {
 
 	// 2. CSRF token generation route
 	s.mux.Handle("GET /api/csrf-token", s.csrfManager.TokenHandler())
+	s.mux.Handle("GET /api/v1/csrf", s.csrfManager.TokenHandler())
 
-	// 3. Impact analysis endpoint (if configured)
+	// 3. Resource inventory and detail endpoints
+	s.mux.Handle("GET /api/v1/resources", s.handleListResources())
+	s.mux.Handle("GET /api/v1/resources/detail", s.handleResourceDetail())
+
+	// 4. Manual discovery sync endpoint
+	syncMgr := NewDiscoverySyncManager()
+	s.mux.Handle("POST /api/v1/discovery/sync", s.handleDiscoverySync(syncMgr))
+
+	// 5. Impact analysis endpoint (if configured)
 	if s.cfg.ImpactHandler != nil {
 		s.mux.Handle("POST /api/v1/impact", s.cfg.ImpactHandler)
 	}
 
-	// 4. Fallback 404 handler matching Express lines 109-114
+	// 6. Fallback 404 handler matching Express lines 109-114
 	s.mux.Handle("/", NotFoundHandler())
 }
 

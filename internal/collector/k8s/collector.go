@@ -180,6 +180,31 @@ func (c *Collector) WaitForIdle(ctx context.Context) error {
 	return c.tracker.WaitForIdle(ctx)
 }
 
+// WorkspaceID returns the tenant workspace UUID configured for this collector.
+func (c *Collector) WorkspaceID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.workspaceID
+}
+
+// ClusterID returns the cluster identifier configured for this collector.
+func (c *Collector) ClusterID() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.clusterID
+}
+
+// Ping verifies connectivity to the underlying Kubernetes API server.
+func (c *Collector) Ping(ctx context.Context) error {
+	c.mu.RLock()
+	client := c.client
+	c.mu.RUnlock()
+	if client == nil {
+		return ErrMissingClient
+	}
+	return client.Ping(ctx)
+}
+
 // ---------------------------------------------------------------------------
 // Core Collection Sweep (Read-Only)
 // ---------------------------------------------------------------------------

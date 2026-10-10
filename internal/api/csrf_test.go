@@ -147,3 +147,13 @@ func TestCSRFMiddleware_Enforcement(t *testing.T) {
 		t.Errorf("test mode expected 200 without token, got %d", testRec.Code)
 	}
 }
+
+func TestCSRFManager_EmptySecret_CannotGenerate(t *testing.T) {
+	cookieCfg := auth.CookieConfig{Path: "/"}
+	manager := NewCSRFManager("", "x-csrf-token", cookieCfg, false)
+
+	_, _, err := manager.GenerateToken()
+	if err == nil {
+		t.Fatal("expected error when generating CSRF token with empty secret, got nil")
+	}
+}
